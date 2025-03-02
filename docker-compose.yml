@@ -1,0 +1,7 @@
+services:
+  rabbitmq:
+    image: docker.io/library/rabbitmq:3-alpine
+    platform: linux/arm64 
+    ports:
+      - "5672:5672"
+      - "15672:15672"
