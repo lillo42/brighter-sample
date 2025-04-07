@@ -1,8 +1,6 @@
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper
-    networks:
-      - local
     ports:
       - "2181"
     environment:
@@ -10,8 +8,6 @@ services:
 
   kafka:
     image: confluentinc/cp-kafka
-    networks:
-      - local
     depends_on:
       - zookeeper
     healthcheck:
@@ -36,8 +32,6 @@ services:
 
   kafka-ui:
     image: provectuslabs/kafka-ui
-    networks:
-      - local
     container_name: kafka-ui
     depends_on:
       - kafka

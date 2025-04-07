@@ -10,10 +10,9 @@ using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
 
-Console.WriteLine("Hello, World!");
 
 Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Debug()
+    .MinimumLevel.Information()
     .Enrich.FromLogContext()
     .WriteTo.Console()
     .CreateLogger();
@@ -37,17 +36,18 @@ var host = new HostBuilder()
                 .AddHostedService<ServiceActivatorHostedService>()
                 .AddServiceActivator(opt =>
                 {
-                    opt.Subscriptions = new Subscription[]
-                    {
+                    opt.Subscriptions =
+                    [
                         new KafkaSubscription<Greeting>(
                             new SubscriptionName("kafka.greeting.subscription"),
                             new ChannelName("greeting.topic"),
                             new RoutingKey("greeting.topic"),
+                            groupId: "some-consumer-group",
                             makeChannels: OnMissingChannel.Create,
-                            numOfPartitions: 16,
-                            noOfPerformers: 16
+                            numOfPartitions: 2,
+                            noOfPerformers: 2
                         ),
-                    };
+                    ];
 
                     opt.ChannelFactory = new ChannelFactory(
                         new KafkaMessageConsumerFactory(connection)
@@ -61,7 +61,7 @@ var host = new HostBuilder()
                             new KafkaPublication
                             {
                                 MakeChannels = OnMissingChannel.Create,
-                                NumPartitions = 16,
+                                NumPartitions = 2,
                                 Topic = new RoutingKey("greeting.topic"),
                             },
                         ]
@@ -75,7 +75,8 @@ _ = host.RunAsync();
 
 while (true)
 {
-    Console.Write("Say your name (or q to quit):");
+    await Task.Delay(TimeSpan.FromSeconds(10));
+    Console.Write("Say your name (or q to quit): ");
     var name = Console.ReadLine();
 
     if (string.IsNullOrEmpty(name))
@@ -89,6 +90,7 @@ while (true)
     }
 
     var process = host.Services.GetRequiredService<IAmACommandProcessor>();
+    process.Post(new Greeting { Name = name });
 }
 
 host.WaitForShutdown();
