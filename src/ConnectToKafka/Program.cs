@@ -45,7 +45,7 @@ var host = new HostBuilder()
                             groupId: "some-consumer-group",
                             makeChannels: OnMissingChannel.Create,
                             numOfPartitions: 2,
-                            noOfPerformers: 2
+                            isAsync: true
                         ),
                     ];
 
@@ -61,7 +61,6 @@ var host = new HostBuilder()
                             new KafkaPublication
                             {
                                 MakeChannels = OnMissingChannel.Create,
-                                NumPartitions = 2,
                                 Topic = new RoutingKey("greeting.topic"),
                             },
                         ]
@@ -75,7 +74,7 @@ _ = host.RunAsync();
 
 while (true)
 {
-    await Task.Delay(TimeSpan.FromSeconds(10));
+    await Task.Delay(TimeSpan.FromSeconds(2));
     Console.Write("Say your name (or q to quit): ");
     var name = Console.ReadLine();
 
@@ -120,11 +119,13 @@ public class GreetingMapper : IAmAMessageMapper<Greeting>
     }
 }
 
-public class GreetingHandler(ILogger<GreetingHandler> logger) : RequestHandler<Greeting>
+public class GreetingHandler(ILogger<GreetingHandler> logger) : RequestHandlerAsync<Greeting>
 {
-    public override Greeting Handle(Greeting command)
+    public override async Task<Greeting> HandleAsync(Greeting command, CancellationToken cancellationToken = default)
     {
+        logger.LogInformation("Processing {Name}", command.Name);
+        await Task.Delay(1_000);  // Simulate async I/O (e.g., HTTP call)
         logger.LogInformation("Hello {Name}", command.Name);
-        return base.Handle(command);
+        return await base.HandleAsync(command, cancellationToken);
     }
 }
