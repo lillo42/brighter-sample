@@ -8,6 +8,7 @@ using Paramore.Brighter.MessagingGateway.MsSql;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
+using Paramore.Brighter.Extensions.DependencyInjection;
 
 Log.Logger = new LoggerConfiguration()
   .MinimumLevel.Information()
@@ -19,25 +20,27 @@ IHost host = new HostBuilder()
   .UseSerilog()
   .ConfigureServices(static (_, services) =>
       {
-          MsSqlConfiguration config = new("");
+          MsSqlConfiguration config = new("Server=127.0.0.1,11433;Database=BrighterTests;User Id=sa;Password=Password123!;Application Name=BrighterTests;Connect Timeout=60;Encrypt=false", queueStoreTable: "QueueData");
           services
-           .AddHostedService<ServiceActivatorHostedService>()
-           .AddServiceActivator(opt =>
-           {
-               opt.Subscriptions = [
-                 new MsSqlSubscription<Greeting>(
-                      name: new SubscriptionName("greeting.subscription"),
-                      channelName: new ChannelName("greeting.channel"),
-                      routingKey: new RoutingKey("greeting.topic"),
-                      makeChannels: OnMissingChannel.Create
-                    )
-               ];
+            .AddHostedService<ServiceActivatorHostedService>()
+            .AddServiceActivator(opt =>
+            {
+                opt.Subscriptions = [
+                  new MsSqlSubscription<Greeting>(
+                        name: new SubscriptionName("greeting.subscription"),
+                        channelName: new ChannelName("greeting.topic"),
+                        makeChannels: OnMissingChannel.Create
+                      )
+                ];
 
-               opt.ChannelFactory = new ChannelFactory(new MsSqlMessageConsumerFactory(config));
-           })
-           .UseExternalBus(new MsSqlProducerRegistryFactory(config, new Publication[0]).Create())
-           .AutoFromAssemblies()
-           ;
+                opt.ChannelFactory = new ChannelFactory(new MsSqlMessageConsumerFactory(config));
+            })
+            .UseExternalBus(new MsSqlProducerRegistryFactory(config, [
+                  new Publication{
+                      Topic = new RoutingKey("greeting.topic"),
+                      MakeChannels = OnMissingChannel.Create
+                   }]).Create())
+            .AutoFromAssemblies();
       })
   .Build();
 
@@ -45,7 +48,7 @@ _ = host.StartAsync();
 
 while (true)
 {
-    await Task.Delay(TimeSpan.FromSeconds(10));
+    await Task.Delay(TimeSpan.FromSeconds(2));
     Console.Write("Say your name (or q to quit): ");
     string? name = Console.ReadLine();
 
