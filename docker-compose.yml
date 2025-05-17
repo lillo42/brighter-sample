@@ -1,0 +1,10 @@
+﻿services:
+  valkey:
+    image: valkey/valkey
+    ports:
+      - "6379:6379"
+#  redis:
+#    image: redis
+#    command: redis-server --loglevel verbose 
+#    ports:
+#      - "6379:6379"

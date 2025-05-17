@@ -22,7 +22,7 @@ var host = new HostBuilder()
         {
             var connection = new RedisMessagingGatewayConfiguration
             {
-                RedisConnectionString = "localhost:6379?connectTimeout=1&sendTimeout=1000&",
+                RedisConnectionString = "localhost:6379?connectTimeout=1000&sendTimeout=1000&",
                 MaxPoolSize = 10,
                 MessageTimeToLive = TimeSpan.FromMinutes(10)
             };
