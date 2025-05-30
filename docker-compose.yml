@@ -1,0 +1,15 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    platform: linux/amd64
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server
+    ports:
+      - "1433:1433"
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=Password123!
+      - MSSQL_PID=Express
