@@ -135,7 +135,12 @@ IHost host = new HostBuilder()
                             new RmqPublication
                             {
                                 MakeChannels = OnMissingChannel.Create,
-                                Topic = new RoutingKey("greeting.topic"),
+                                Topic = new RoutingKey("order-paid"),
+                            },
+                            new RmqPublication
+                            {
+                                MakeChannels = OnMissingChannel.Create,
+                                Topic = new RoutingKey("order-placed"),
                             },
                         ]
                     ).Create()
