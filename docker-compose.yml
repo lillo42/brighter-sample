@@ -6,10 +6,9 @@ services:
       - "5672:5672"
       - "15672:15672"
   sqlserver:
-    image: mcr.microsoft.com/mssql/server
+    image: mysql
     ports:
-      - "1433:1433"
+      - "3306:3306"
     environment:
-      - ACCEPT_EULA=Y
-      - SA_PASSWORD=Password123!
-      - MSSQL_PID=Express
+      - MYSQL_DATABASE=brighter_test
+      - MYSQL_ROOT_PASSWORD=Password123!

@@ -1,74 +1,48 @@
 ﻿using System.Data;
 using System.Text.Json;
-using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MySqlConnector;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
 using Paramore.Brighter.Extensions.Hosting;
 using Paramore.Brighter.MessagingGateway.RMQ;
-using Paramore.Brighter.MsSql;
-using Paramore.Brighter.Outbox.MsSql;
+using Paramore.Brighter.MySql;
+using Paramore.Brighter.Outbox.MySql;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
 
-const string ConnectionString = "Server=127.0.0.1,1433;Database=BrighterTests;User Id=sa;Password=Password123!;Application Name=BrighterTests;Connect Timeout=60;Encrypt=false;";
+const string ConnectionString = "server=127.0.0.1;uid=root;pwd=Password123!;database=brighter_test";
 
-using (SqlConnection connection = new("Server=127.0.0.1,1433;Database=master;User Id=sa;Password=Password123!;Application Name=BrighterTests;Connect Timeout=60;Encrypt=false;"))
+using (MySqlConnection connection = new(ConnectionString))
 {
     await connection.OpenAsync();
 
-    using SqlCommand command = connection.CreateCommand();
+    using var command = connection.CreateCommand();
     command.CommandText =
       """
-      IF DB_ID('BrighterTests') IS NULL
-      BEGIN
-        CREATE DATABASE BrighterTests;
-      END;
+      CREATE TABLE IF NOT EXISTS `outbox_messages`(
+        `MessageId` CHAR(36) NOT NULL,
+        `Topic` VARCHAR(255) NOT NULL,
+        `MessageType` VARCHAR(32) NOT NULL,
+        `Timestamp` TIMESTAMP(3) NOT NULL,
+        `CorrelationId` CHAR(36) NULL,
+        `ReplyTo` VARCHAR(255) NULL,
+        `ContentType` VARCHAR(128) NULL,
+        `Dispatched` TIMESTAMP(3) NULL,
+        `HeaderBag` TEXT NOT NULL,
+        `Body` TEXT NOT NULL,
+        `Created` TIMESTAMP(3) NOT NULL DEFAULT NOW(3),
+        `CreatedID` INT(11) NOT NULL AUTO_INCREMENT,
+        UNIQUE(`CreatedID`),
+        PRIMARY KEY (`MessageId`)
+      );
       """;
     _ = await command.ExecuteNonQueryAsync();
 
-}
-
-using (SqlConnection connection = new(ConnectionString))
-{
-    await connection.OpenAsync();
-
-    using SqlCommand command = connection.CreateCommand();
-    command.CommandText =
-      """
-      IF OBJECT_ID('OutboxMessages', 'U') IS NULL
-      BEGIN 
-        CREATE TABLE [OutboxMessages]
-        (
-          [Id] [BIGINT] NOT NULL IDENTITY ,
-          [MessageId] UNIQUEIDENTIFIER NOT NULL ,
-          [Topic] NVARCHAR(255) NULL ,
-
-          [MessageType] NVARCHAR(32) NULL ,
-          [Timestamp] DATETIME NULL ,
-          [CorrelationId] UNIQUEIDENTIFIER NULL,
-
-          [ReplyTo] NVARCHAR(255) NULL,
-          [ContentType] NVARCHAR(128) NULL,  
-          [Dispatched] DATETIME NULL,
-          [HeaderBag] NTEXT NULL ,
-          [Body] NTEXT NULL ,
-          PRIMARY KEY ( [Id] ) 
-        );
-      END 
-      """;
-    try
-    {
-        _ = await command.ExecuteNonQueryAsync();
-    }
-    catch
-    {
-        // Ignore if it exists
-    }
 }
 
 Log.Logger = new LoggerConfiguration()
@@ -91,8 +65,8 @@ IHost host = new HostBuilder()
             };
 
             services
-              .AddScoped<SqlUnitOfWork, SqlUnitOfWork>()
-              .TryAddScoped<IUnitOfWork>(provider => provider.GetRequiredService<SqlUnitOfWork>());
+              .AddScoped<MySqlUnitOfWork, MySqlUnitOfWork>()
+              .TryAddScoped<IUnitOfWork>(provider => provider.GetRequiredService<MySqlUnitOfWork>());
 
             _ = services
                 .AddHostedService<ServiceActivatorHostedService>()
@@ -122,8 +96,8 @@ IHost host = new HostBuilder()
                     );
                 })
                 .AutoFromAssemblies()
-                .UseMsSqlOutbox(new MsSqlConfiguration(ConnectionString, "OutboxMessages"), typeof(SqlConnectionProvider), ServiceLifetime.Scoped)
-                .UseMsSqlTransactionConnectionProvider(typeof(SqlConnectionProvider))
+                .UseMySqlOutbox(new MySqlConfiguration(ConnectionString, "outbox_messages"), typeof(MySqlConnectionProvider), ServiceLifetime.Scoped)
+                .UseMySqTransactionConnectionProvider(typeof(MySqlConnectionProvider))
                 .UseOutboxSweeper(opt =>
                 {
                     opt.BatchSize = 10;
@@ -301,21 +275,21 @@ public class OrderPaidMapper : IAmAMessageMapper<OrderPaid>
     }
 }
 
-public class SqlConnectionProvider(SqlUnitOfWork sqlConnection) : IMsSqlTransactionConnectionProvider
+public class MySqlConnectionProvider(MySqlUnitOfWork sqlConnection) : IMySqlTransactionConnectionProvider
 {
-    private readonly SqlUnitOfWork _sqlConnection = sqlConnection;
+    private readonly MySqlUnitOfWork _sqlConnection = sqlConnection;
 
-    public SqlConnection GetConnection()
+    public MySqlConnection GetConnection()
     {
         return _sqlConnection.Connection;
     }
 
-    public Task<SqlConnection> GetConnectionAsync(CancellationToken cancellationToken = default)
+    public Task<MySqlConnection> GetConnectionAsync(CancellationToken cancellationToken = default)
     {
         return Task.FromResult(_sqlConnection.Connection);
     }
 
-    public SqlTransaction? GetTransaction()
+    public MySqlTransaction? GetTransaction()
     {
         return _sqlConnection.Transaction;
     }
@@ -331,23 +305,22 @@ public interface IUnitOfWork
     Task RollbackAsync(CancellationToken cancellationToken);
 }
 
-public class SqlUnitOfWork(MsSqlConfiguration configuration) : IUnitOfWork
+public class MySqlUnitOfWork : IUnitOfWork
 {
-    public SqlConnection Connection { get; } = new(configuration.ConnectionString);
-    public SqlTransaction? Transaction { get; private set; }
-
-    public async Task BeginTransactionAsync(CancellationToken cancellationToken,
-        IsolationLevel isolationLevel = IsolationLevel.Serializable)
+    public MySqlUnitOfWork(MySqlConfiguration configuration)
     {
+        Connection = new(configuration.ConnectionString);
+        Connection.Open();
+    }
 
+    public MySqlConnection Connection { get; }
+    public MySqlTransaction? Transaction { get; private set; }
+
+    public async Task BeginTransactionAsync(CancellationToken cancellationToken, IsolationLevel isolationLevel = IsolationLevel.Serializable)
+    {
         if (Transaction == null)
         {
-            if (Connection.State != ConnectionState.Open)
-            {
-                await Connection.OpenAsync(cancellationToken);
-            }
-
-            Transaction = Connection.BeginTransaction(isolationLevel);
+            Transaction = await Connection.BeginTransactionAsync(isolationLevel);
         }
     }
 
@@ -367,14 +340,9 @@ public class SqlUnitOfWork(MsSqlConfiguration configuration) : IUnitOfWork
         }
     }
 
-    public async Task<SqlCommand> CreateSqlCommandAsync(string sql, SqlParameter[] parameters, CancellationToken cancellationToken)
+    public Task<MySqlCommand> CreateSqlCommandAsync(string sql, MySqlParameter[] parameters, CancellationToken cancellationToken)
     {
-        if (Connection.State != ConnectionState.Open)
-        {
-            await Connection.OpenAsync(cancellationToken);
-        }
-
-        SqlCommand command = Connection.CreateCommand();
+        var command = Connection.CreateCommand();
 
         if (Transaction != null)
         {
@@ -387,6 +355,6 @@ public class SqlUnitOfWork(MsSqlConfiguration configuration) : IUnitOfWork
             command.Parameters.AddRange(parameters);
         }
 
-        return command;
+        return Task.FromResult(command);
     }
 }
