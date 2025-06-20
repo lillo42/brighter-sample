@@ -1,46 +1,44 @@
 ﻿using System.Data;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using MySqlConnector;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
 using Paramore.Brighter.Extensions.Hosting;
 using Paramore.Brighter.MessagingGateway.RMQ;
-using Paramore.Brighter.MySql;
-using Paramore.Brighter.Outbox.MySql;
+using Paramore.Brighter.Outbox.Sqlite;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
+using Paramore.Brighter.Sqlite;
 using Serilog;
 
-const string ConnectionString = "server=127.0.0.1;uid=root;pwd=Password123!;database=brighter_test";
+const string ConnectionString = "Data Source=brighter.db";
 
-using (MySqlConnection connection = new(ConnectionString))
+await using (SqliteConnection connection = new(ConnectionString))
 {
     await connection.OpenAsync();
 
-    using var command = connection.CreateCommand();
+    await using var command = connection.CreateCommand();
     command.CommandText =
       """
-      CREATE TABLE IF NOT EXISTS `outbox_messages`(
-        `MessageId` CHAR(36) NOT NULL,
-        `Topic` VARCHAR(255) NOT NULL,
-        `MessageType` VARCHAR(32) NOT NULL,
-        `Timestamp` TIMESTAMP(3) NOT NULL,
-        `CorrelationId` CHAR(36) NULL,
-        `ReplyTo` VARCHAR(255) NULL,
-        `ContentType` VARCHAR(128) NULL,
-        `Dispatched` TIMESTAMP(3) NULL,
-        `HeaderBag` TEXT NOT NULL,
-        `Body` TEXT NOT NULL,
-        `Created` TIMESTAMP(3) NOT NULL DEFAULT NOW(3),
-        `CreatedID` INT(11) NOT NULL AUTO_INCREMENT,
-        UNIQUE(`CreatedID`),
-        PRIMARY KEY (`MessageId`)
+      CREATE TABLE IF NOT EXISTS "outbox_messages"(
+        [MessageId] TEXT NOT NULL COLLATE NOCASE,
+        [Topic] TEXT NULL,
+        [MessageType] TEXT NULL,
+        [Timestamp] TEXT NULL,
+        [CorrelationId] TEXT NULL,
+        [ReplyTo] TEXT NULL,
+        [ContentType] TEXT NULL,  
+        [Dispatched] TEXT NULL,
+        [HeaderBag] TEXT NULL,
+        [Body] TEXT NULL,
+        CONSTRAINT[PK_MessageId] PRIMARY KEY([MessageId])
       );
       """;
+    // MessageId, MessageType, Topic, Timestamp, CorrelationId, ReplyTo, ContentType, HeaderBag, Body
     _ = await command.ExecuteNonQueryAsync();
 
 }
@@ -65,8 +63,8 @@ IHost host = new HostBuilder()
             };
 
             services
-              .AddScoped<MySqlUnitOfWork, MySqlUnitOfWork>()
-              .TryAddScoped<IUnitOfWork>(provider => provider.GetRequiredService<MySqlUnitOfWork>());
+              .AddScoped<SqliteUnitOfWork, SqliteUnitOfWork>()
+              .TryAddScoped<IUnitOfWork>(provider => provider.GetRequiredService<SqliteUnitOfWork>());
 
             _ = services
                 .AddHostedService<ServiceActivatorHostedService>()
@@ -96,8 +94,8 @@ IHost host = new HostBuilder()
                     );
                 })
                 .AutoFromAssemblies()
-                .UseMySqlOutbox(new MySqlConfiguration(ConnectionString, "outbox_messages"), typeof(MySqlConnectionProvider), ServiceLifetime.Scoped)
-                .UseMySqTransactionConnectionProvider(typeof(MySqlConnectionProvider))
+                .UseSqliteOutbox(new SqliteConfiguration(ConnectionString, "outbox_messages"), typeof(SqliteConnectionProvider), ServiceLifetime.Scoped)
+                .UseSqliteTransactionConnectionProvider(typeof(SqliteConnectionProvider))
                 .UseOutboxSweeper(opt =>
                 {
                     opt.BatchSize = 10;
@@ -154,8 +152,8 @@ while (!cancellationTokenSource.IsCancellationRequested)
 
     try
     {
-        using IServiceScope scope = host.Services.CreateScope();
-        IAmACommandProcessor process = scope.ServiceProvider.GetRequiredService<IAmACommandProcessor>();
+        using var scope = host.Services.CreateScope();
+        var process = scope.ServiceProvider.GetRequiredService<IAmACommandProcessor>();
         await process.SendAsync(new CreateNewOrder { Value = value });
     }
     catch
@@ -189,10 +187,10 @@ public class CreateNewOrderHandler(IAmACommandProcessor commandProcessor,
 {
     public override async Task<CreateNewOrder> HandleAsync(CreateNewOrder command, CancellationToken cancellationToken = default)
     {
-        await unitOfWork.BeginTransactionAsync(cancellationToken);
+        await unitOfWork.BeginTransactionAsync();
         try
         {
-            string id = Guid.NewGuid().ToString();
+            var id = Guid.NewGuid().ToString();
             logger.LogInformation("Creating a new order: {OrderId}", id);
 
             await Task.Delay(10, cancellationToken); // emulating an process
@@ -244,6 +242,7 @@ public class OrderPlacedMapper : IAmAMessageMapper<OrderPlaced>
         header.TimeStamp = DateTime.UtcNow;
         header.Topic = "order-placed";
         header.MessageType = MessageType.MT_EVENT;
+        header.ReplyTo = "";
 
         var body = new MessageBody(JsonSerializer.Serialize(request));
         return new Message(header, body);
@@ -264,6 +263,7 @@ public class OrderPaidMapper : IAmAMessageMapper<OrderPaid>
         header.TimeStamp = DateTime.UtcNow;
         header.Topic = "order-paid";
         header.MessageType = MessageType.MT_EVENT;
+        header.ReplyTo = "";
 
         var body = new MessageBody(JsonSerializer.Serialize(request));
         return new Message(header, body);
@@ -275,52 +275,50 @@ public class OrderPaidMapper : IAmAMessageMapper<OrderPaid>
     }
 }
 
-public class MySqlConnectionProvider(MySqlUnitOfWork sqlConnection) : IMySqlTransactionConnectionProvider
+public class SqliteConnectionProvider(SqliteUnitOfWork sqlConnection) : ISqliteTransactionConnectionProvider
 {
-    private readonly MySqlUnitOfWork _sqlConnection = sqlConnection;
-
-    public MySqlConnection GetConnection()
+    public SqliteConnection GetConnection()
     {
-        return _sqlConnection.Connection;
+        return sqlConnection.Connection;
     }
 
-    public Task<MySqlConnection> GetConnectionAsync(CancellationToken cancellationToken = default)
+    public Task<SqliteConnection> GetConnectionAsync(CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(_sqlConnection.Connection);
+        return Task.FromResult(sqlConnection.Connection);
     }
 
-    public MySqlTransaction? GetTransaction()
+    public SqliteTransaction? GetTransaction()
     {
-        return _sqlConnection.Transaction;
+        return sqlConnection.Transaction;
     }
 
-    public bool HasOpenTransaction => _sqlConnection.Transaction != null;
+    public bool HasOpenTransaction => sqlConnection.Transaction != null;
     public bool IsSharedConnection => true;
 }
 
 public interface IUnitOfWork
 {
-    Task BeginTransactionAsync(CancellationToken cancellationToken, IsolationLevel isolationLevel = IsolationLevel.Serializable);
+    Task BeginTransactionAsync(IsolationLevel isolationLevel = IsolationLevel.Serializable);
     Task CommitAsync(CancellationToken cancellationToken);
     Task RollbackAsync(CancellationToken cancellationToken);
 }
 
-public class MySqlUnitOfWork : IUnitOfWork
+public class SqliteUnitOfWork : IUnitOfWork
 {
-    public MySqlUnitOfWork(MySqlConfiguration configuration)
+    public SqliteUnitOfWork(SqliteConfiguration configuration)
     {
         Connection = new(configuration.ConnectionString);
         Connection.Open();
     }
 
-    public MySqlConnection Connection { get; }
-    public MySqlTransaction? Transaction { get; private set; }
+    public SqliteConnection Connection { get; }
+    public SqliteTransaction? Transaction { get; private set; }
 
-    public async Task BeginTransactionAsync(CancellationToken cancellationToken, IsolationLevel isolationLevel = IsolationLevel.Serializable)
+    public async Task BeginTransactionAsync(IsolationLevel isolationLevel = IsolationLevel.Serializable)
     {
         if (Transaction == null)
         {
-            Transaction = await Connection.BeginTransactionAsync(isolationLevel);
+            Transaction = (SqliteTransaction)await Connection.BeginTransactionAsync(isolationLevel);
         }
     }
 
@@ -338,23 +336,5 @@ public class MySqlUnitOfWork : IUnitOfWork
         {
             await Transaction.RollbackAsync(cancellationToken);
         }
-    }
-
-    public Task<MySqlCommand> CreateSqlCommandAsync(string sql, MySqlParameter[] parameters, CancellationToken cancellationToken)
-    {
-        var command = Connection.CreateCommand();
-
-        if (Transaction != null)
-        {
-            command.Transaction = Transaction;
-        }
-
-        command.CommandText = sql;
-        if (parameters.Length > 0)
-        {
-            command.Parameters.AddRange(parameters);
-        }
-
-        return Task.FromResult(command);
     }
 }
