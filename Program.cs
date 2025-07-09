@@ -36,7 +36,8 @@ var host = new HostBuilder()
                             new SubscriptionName("kafka.greeting.subscription"),
                             new ChannelName("greeting.topic"),
                             new RoutingKey("greeting.topic"),
-                            makeChannels: OnMissingChannel.Create
+                            makeChannels: OnMissingChannel.Create,
+                            messagePumpType: MessagePumpType.Reactor
                         ),
                     ];
 
@@ -84,7 +85,7 @@ while (true)
 
 await host.StopAsync();
 
-public class Greeting() : Event(Guid.NewGuid())
+public class Greeting() : Command(Guid.NewGuid())
 {
     public string Name { get; set; } = string.Empty;
 }
@@ -98,7 +99,7 @@ public class GreetingMapper : IAmAMessageMapper<Greeting>
             MessageId = request.Id,
             TimeStamp = DateTimeOffset.UtcNow,
             Topic = publication.Topic!,
-            MessageType = MessageType.MT_EVENT
+            MessageType = MessageType.MT_COMMAND
         };
 
         var body = new MessageBody(JsonSerializer.Serialize(request));
