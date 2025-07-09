@@ -90,30 +90,6 @@ public class Greeting() : Command(Guid.NewGuid())
     public string Name { get; set; } = string.Empty;
 }
 
-public class GreetingMapper : IAmAMessageMapper<Greeting>
-{
-    public Message MapToMessage(Greeting request, Publication publication)
-    {
-        var header = new MessageHeader
-        {
-            MessageId = request.Id,
-            TimeStamp = DateTimeOffset.UtcNow,
-            Topic = publication.Topic!,
-            MessageType = MessageType.MT_COMMAND
-        };
-
-        var body = new MessageBody(JsonSerializer.Serialize(request));
-        return new Message(header, body);
-    }
-
-    public Greeting MapToRequest(Message message)
-    {
-        return JsonSerializer.Deserialize<Greeting>(message.Body.Bytes)!;
-    }
-
-    public IRequestContext? Context { get; set; }
-}
-
 public class GreetingHandler(ILogger<GreetingHandler> logger) : RequestHandler<Greeting>
 {
     public override Greeting Handle(Greeting command)
