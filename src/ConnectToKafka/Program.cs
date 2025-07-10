@@ -1,6 +1,4 @@
-﻿// See https://aka.ms/new-console-template for more information
-using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
@@ -9,7 +7,6 @@ using Paramore.Brighter.MessagingGateway.Kafka;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
-
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
@@ -20,7 +17,7 @@ Log.Logger = new LoggerConfiguration()
 var host = new HostBuilder()
     .UseSerilog()
     .ConfigureServices(
-        (ctx, services) =>
+        (_, services) =>
         {
             var connection = new KafkaMessagingGatewayConfiguration
             {
@@ -43,30 +40,30 @@ var host = new HostBuilder()
                             new ChannelName("greeting.topic"),
                             new RoutingKey("greeting.topic"),
                             groupId: "some-consumer-group",
-                            makeChannels: OnMissingChannel.Create,
-                            numOfPartitions: 2,
-                            noOfPerformers: 2
-                        ),
+                            makeChannels: OnMissingChannel.Create
+                        )
                     ];
 
-                    opt.ChannelFactory = new ChannelFactory(
+                    opt.DefaultChannelFactory = new ChannelFactory(
                         new KafkaMessageConsumerFactory(connection)
                     );
                 })
                 .AutoFromAssemblies()
-                .UseExternalBus(
-                    new KafkaProducerRegistryFactory(
+                .MapperRegistry(registry => registry.SetCloudEventJsonAsDefaultMessageMapper())
+                .UseExternalBus(opt =>
+                {
+                    opt.ProducerRegistry = new KafkaProducerRegistryFactory(
                         connection,
                         [
                             new KafkaPublication
                             {
                                 MakeChannels = OnMissingChannel.Create,
-                                NumPartitions = 2,
-                                Topic = new RoutingKey("greeting.topic"),
-                            },
+                                Source = new Uri("test-app", UriKind.RelativeOrAbsolute),
+                                Topic = new RoutingKey("greeting.topic")
+                            }
                         ]
-                    ).Create()
-                );
+                    ).Create();
+                });
         }
     )
     .Build();
@@ -93,31 +90,12 @@ while (true)
     process.Post(new Greeting { Name = name });
 }
 
-host.WaitForShutdown();
+await host.StopAsync();
 
+[PublicationTopic("greeting.topic")]
 public class Greeting() : Event(Guid.NewGuid())
 {
     public string Name { get; set; } = string.Empty;
-}
-
-public class GreetingMapper : IAmAMessageMapper<Greeting>
-{
-    public Message MapToMessage(Greeting request)
-    {
-        var header = new MessageHeader();
-        header.Id = request.Id;
-        header.TimeStamp = DateTime.UtcNow;
-        header.Topic = "greeting.topic";
-        header.MessageType = MessageType.MT_EVENT;
-
-        var body = new MessageBody(JsonSerializer.Serialize(request));
-        return new Message(header, body);
-    }
-
-    public Greeting MapToRequest(Message message)
-    {
-        return JsonSerializer.Deserialize<Greeting>(message.Body.Bytes)!;
-    }
 }
 
 public class GreetingHandler(ILogger<GreetingHandler> logger) : RequestHandler<Greeting>
