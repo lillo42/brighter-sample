@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
+using Paramore.Brighter.MessageMappers;
 using Paramore.Brighter.MessagingGateway.Kafka;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
@@ -31,7 +32,7 @@ var host = new HostBuilder()
 
             services
                 .AddHostedService<ServiceActivatorHostedService>()
-                .AddServiceActivator(opt =>
+                .AddConsumers(opt =>
                 {
                     opt.Subscriptions =
                     [
@@ -40,17 +41,16 @@ var host = new HostBuilder()
                             new ChannelName("greeting.topic"),
                             new RoutingKey("greeting.topic"),
                             groupId: "some-consumer-group",
-                            makeChannels: OnMissingChannel.Create
+                            makeChannels: OnMissingChannel.Create,
+                            messagePumpType: MessagePumpType.Reactor
                         )
                     ];
 
-                    opt.DefaultChannelFactory = new ChannelFactory(
-                        new KafkaMessageConsumerFactory(connection)
-                    );
+                    opt.DefaultChannelFactory = new ChannelFactory(new KafkaMessageConsumerFactory(connection));
                 })
                 .AutoFromAssemblies()
-                .MapperRegistry(registry => registry.SetCloudEventJsonAsDefaultMessageMapper())
-                .UseExternalBus(opt =>
+                .MapperRegistry(registry => registry.SetDefaultMessageMapper(typeof(CloudEventJsonMessageMapper<>)))
+                .AddProducers(opt =>
                 {
                     opt.ProducerRegistry = new KafkaProducerRegistryFactory(
                         connection,
@@ -93,7 +93,7 @@ while (true)
 await host.StopAsync();
 
 [PublicationTopic("greeting.topic")]
-public class Greeting() : Event(Guid.NewGuid())
+public class Greeting() : Event(Id.Random())
 {
     public string Name { get; set; } = string.Empty;
 }
