@@ -97,7 +97,7 @@ while (true)
 await host.StopAsync();
 
 
-public class SchedulerCommand() : Event(Guid.NewGuid())
+public class SchedulerCommand() : Event(Id.Random())
 {
     public string Name { get; set; } = string.Empty;
     public string Type { get; set; } = string.Empty;
@@ -105,7 +105,7 @@ public class SchedulerCommand() : Event(Guid.NewGuid())
 
 public class SchedulerCommandHandler(ILogger<SchedulerCommandHandler> logger) : RequestHandlerAsync<SchedulerCommand>
 {
-    public override Task<SchedulerCommand> HandleAsync(SchedulerCommand command, CancellationToken cancellationToken = new CancellationToken())
+    public override Task<SchedulerCommand> HandleAsync(SchedulerCommand command, CancellationToken cancellationToken = default)
     {
         logger.LogInformation("Hello {Name} (with Type: {Type})", command.Name, command.Type);
         return base.HandleAsync(command, cancellationToken);
