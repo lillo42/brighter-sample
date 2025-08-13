@@ -1,13 +1,13 @@
-﻿using Hangfire;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
-using Paramore.Brighter.MessageScheduler.Hangfire;
+using Paramore.Brighter.MessageScheduler.Quartz;
 using Paramore.Brighter.MessagingGateway.Postgres;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
+using Quartz;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -23,13 +23,15 @@ var host = new HostBuilder()
     {
         var config = new RelationalDatabaseConfiguration ("Host=localhost;Username=postgres;Password=password;Database=brightertests;", queueStoreTable: "QueueData");
 
-        services
-            .AddHangfire(opt => opt
-                .UseDefaultActivator()
-                .UseRecommendedSerializerSettings()
-                .UseSimpleAssemblyNameTypeSerializer()
-                .UseInMemoryStorage())
-            .AddHangfireServer();
+        services.AddQuartzHostedService(opt => opt.WaitForJobsToComplete = true)
+            .AddQuartz(opt =>
+            {
+                opt.SchedulerId = "QuartzBrighter";
+                opt.SchedulerName = "QuartzBrighter";
+                opt.UseSimpleTypeLoader();
+                opt.UseInMemoryStore();
+                opt.UseInMemoryStore();
+            });
             
         services
             .AddHostedService<ServiceActivatorHostedService>()
@@ -47,10 +49,15 @@ var host = new HostBuilder()
 
                 opt.DefaultChannelFactory= new PostgresChannelFactory(new PostgresMessagingGatewayConnection(config));
             })
-            .UseScheduler(_ => new HangfireMessageSchedulerFactory())
+            .UseScheduler(provider =>
+            {
+                var factory = provider.GetRequiredService<ISchedulerFactory>();
+                return new QuartzSchedulerFactory(
+                    factory.GetScheduler().GetAwaiter().GetResult());
+            })
             .AddProducers(opt =>
             {
-                opt.ProducerRegistry = new  PostgresProducerRegistryFactory(new PostgresMessagingGatewayConnection(config), [
+                opt.ProducerRegistry = new PostgresProducerRegistryFactory(new PostgresMessagingGatewayConnection(config), [
                     new PostgresPublication<SchedulerCommand>
                     {
                         Topic = new RoutingKey("greeting.topic"),
