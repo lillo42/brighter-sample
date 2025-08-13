@@ -11,10 +11,10 @@
   <ItemGroup>
     <PackageReference Include="Hangfire.AspNetCore" Version="1.8.20" />
     <PackageReference Include="Hangfire.InMemory" Version="1.0.0" />
-    <PackageReference Include="Paramore.Brighter.MessagingGateway.Postgres" Version="10.0.0-preview.6" />
-    <PackageReference Include="Paramore.Brighter.MessageScheduler.Hangfire" Version="10.0.0-preview.6" />
-    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.0.0-preview.6" />
-    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.0-preview.6" />
+    <PackageReference Include="Paramore.Brighter.MessagingGateway.Postgres" Version="10.0.0-preview.7" />
+    <PackageReference Include="Paramore.Brighter.MessageScheduler.Hangfire" Version="10.0.0-preview.7" />
+    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.0.0-preview.7" />
+    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.0-preview.7" />
     <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
   </ItemGroup>
 </Project>

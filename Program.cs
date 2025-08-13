@@ -33,7 +33,7 @@ var host = new HostBuilder()
             
         services
             .AddHostedService<ServiceActivatorHostedService>()
-            .AddServiceActivator(opt =>
+            .AddConsumers(opt =>
             {
                 opt.Subscriptions = [
                     new PostgresSubscription<SchedulerCommand>(
@@ -48,7 +48,7 @@ var host = new HostBuilder()
                 opt.DefaultChannelFactory= new PostgresChannelFactory(new PostgresMessagingGatewayConnection(config));
             })
             .UseScheduler(_ => new HangfireMessageSchedulerFactory())
-            .UseExternalBus(opt =>
+            .AddProducers(opt =>
             {
                 opt.ProducerRegistry = new  PostgresProducerRegistryFactory(new PostgresMessagingGatewayConnection(config), [
                     new PostgresPublication<SchedulerCommand>
