@@ -1,16 +1,14 @@
-﻿using System.Data.Common;
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
+using Paramore.Brighter.Inbox;
+using Paramore.Brighter.Inbox.Sqlite;
 using Paramore.Brighter.MessagingGateway.Redis;
-using Paramore.Brighter.Outbox.Hosting;
-using Paramore.Brighter.Outbox.Sqlite;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
-using Paramore.Brighter.Sqlite;
 using Serilog;
 
 const string connectionString = "Data Source=brighter.db";
@@ -22,27 +20,12 @@ await using (SqliteConnection connection = new(connectionString))
     await using var command = connection.CreateCommand();
     command.CommandText =
       """
-      CREATE TABLE IF NOT EXISTS "outbox_messages"(
-        [MessageId] TEXT NOT NULL COLLATE NOCASE,
-        [MessageType] TEXT NULL,
-        [Topic] TEXT NULL,
-        [Timestamp] TEXT NULL,
-        [CorrelationId] TEXT NULL,
-        [ReplyTo] TEXT NULL,
-        [ContentType] TEXT NULL,  
-        [PartitionKey] TEXT NULL,
-        [WorkflowId] TEXT NULL,
-        [JobId] TEXT NULL,
-        [Dispatched] TEXT NULL,
-        [HeaderBag] TEXT NULL,
-        [Body] BLOB NULL,
-        [Source] TEXT NULL,
-        [Type] TEXT NULL,
-        [DataSchema] TEXT NULL,
-        [Subject] TEXT NULL,
-        [TraceParent] TEXT NULL,
-        [TraceState] TEXT NULL,
-        [Baggage] TEXT NULL
+      CREATE TABLE IF NOT EXISTS "inbox_messages"(
+        [CommandId] uniqueidentifier CONSTRAINT PK_MessageId PRIMARY KEY,
+        [CommandType] nvarchar(256),
+        [CommandBody] ntext,
+        [Timestamp] TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        [ContextKey] nvarchar(256)
       );
       """;
     // MessageId, MessageType, Topic, Timestamp, CorrelationId, ReplyTo, ContentType, HeaderBag, Body
@@ -52,12 +35,12 @@ await using (SqliteConnection connection = new(connectionString))
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
-    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Debug)
     .Enrich.FromLogContext()
     .WriteTo.Console()
     .CreateLogger();
 
-IHost host = new HostBuilder()
+var host = new HostBuilder()
     .UseSerilog()
     .ConfigureServices(
         (ctx, services) =>
@@ -69,13 +52,14 @@ IHost host = new HostBuilder()
                 MessageTimeToLive = TimeSpan.FromMinutes(10)
             };
             
-            var configuration = new RelationalDatabaseConfiguration(connectionString, "brighter", "outbox_messages", binaryMessagePayload: true);
+            var configuration = new RelationalDatabaseConfiguration(connectionString, "brighter", inboxTableName: "inbox_messages");
 
             services
                 .AddSingleton<IAmARelationalDatabaseConfiguration >(configuration)
                 .AddHostedService<ServiceActivatorHostedService>()
                 .AddConsumers(opt =>
                 {
+                    opt.InboxConfiguration = new InboxConfiguration(new SqliteInbox(configuration), actionOnExists: OnceOnlyAction.Warn);
                     opt.Subscriptions =
                     [
                         new RedisSubscription<OrderPlaced>(
@@ -102,10 +86,6 @@ IHost host = new HostBuilder()
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
-                    opt.Outbox = new SqliteOutbox(configuration);
-                    opt.ConnectionProvider = typeof(SqliteConnectionProvider);
-                    opt.TransactionProvider = typeof(SqliteUnitOfWork);
-                    
                     opt.ProducerRegistry = new RedisProducerRegistryFactory(
                         connection,
                         [
@@ -120,10 +100,7 @@ IHost host = new HostBuilder()
                                 Topic = new RoutingKey("order-placed"),
                             },
                         ]).Create();
-                })
-                .UseOutboxSweeper(opt => { opt.BatchSize = 10; })
-                .UseOutboxArchiver<DbTransaction>(new NullOutboxArchiveProvider());
-
+                });
         }
     )
     .Build();
@@ -196,13 +173,8 @@ public class CreateNewOrderHandler(IAmACommandProcessor commandProcessor,
             var id = Uuid.NewAsString();
             logger.LogInformation("Creating a new order: {OrderId}", id);
 
-            await commandProcessor.DepositPostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
-            if (command.Value % 3 == 0)
-            {
-                throw new InvalidOperationException("invalid value");
-            }
-
-            await commandProcessor.DepositPostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
+            await commandProcessor.PostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
+            await commandProcessor.PostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
 
             return await base.HandleAsync(command, cancellationToken);
         }
