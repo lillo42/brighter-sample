@@ -8,18 +8,16 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
-using Paramore.Brighter.DynamoDb;
 using Paramore.Brighter.Extensions.DependencyInjection;
+using Paramore.Brighter.Inbox.DynamoDB;
 using Paramore.Brighter.MessagingGateway.AWSSQS;
-using Paramore.Brighter.Outbox.DynamoDB;
-using Paramore.Brighter.Outbox.Hosting;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
-    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Debug)
     .Enrich.FromLogContext()
     .WriteTo.Console()
     .CreateLogger();
@@ -42,6 +40,9 @@ var host = new HostBuilder()
                 .AddHostedService<ServiceActivatorHostedService>()
                 .AddConsumers(opt =>
                 {
+                    opt.InboxConfiguration = new InboxConfiguration(
+                        new DynamoDbInbox(dynamoDbClient, new DynamoDbInboxConfiguration()));
+                    
                     opt.Subscriptions =
                     [
                         new SqsSubscription<OrderPlaced>(
@@ -68,14 +69,6 @@ var host = new HostBuilder()
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
-                    opt.Outbox = new DynamoDbOutbox(dynamoDbClient, 
-                        new DynamoDbConfiguration
-                        {
-                            TimeToLive = TimeSpan.FromMinutes(1) 
-                        });
-                    opt.ConnectionProvider = typeof(DynamoDbUnitOfWork);
-                    opt.TransactionProvider = typeof(DynamoDbUnitOfWork);
-                    
                     opt.ProducerRegistry = new SnsProducerRegistryFactory(
                         connection,
                         [
@@ -90,10 +83,7 @@ var host = new HostBuilder()
                                 Topic = new RoutingKey("order-placed"),
                             },
                         ]).Create();
-                })
-                .UseOutboxSweeper(opt => { opt.BatchSize = 10; })
-                // .UseOutboxArchiver<DbTransaction>(new NullOutboxArchiveProvider())
-                ;
+                });
         }
     )
     .Build();
