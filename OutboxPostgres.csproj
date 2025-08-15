@@ -9,11 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Paramore.Brighter.Extensions.Hosting" Version="9.9.8" />
-    <PackageReference Include="Paramore.Brighter.MessagingGateway.RMQ" Version="9.9.8" />
-    <PackageReference Include="Paramore.Brighter.Outbox.PostgreSql" Version="9.9.8" />
-    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="9.9.8" />
-    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="9.9.8" />
+    <PackageReference Include="Paramore.Brighter.Outbox.Hosting" Version="10.0.0-preview.8" />
+    <PackageReference Include="Paramore.Brighter.Outbox.PostgreSql" Version="10.0.0-preview.8" />
+    <PackageReference Include="Paramore.Brighter.MessagingGateway.RMQ.Async" Version="10.0.0-preview.8" />
+    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.0.0-preview.8" />
+    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.0-preview.8" />
     <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
   </ItemGroup>
 

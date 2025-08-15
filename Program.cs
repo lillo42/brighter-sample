@@ -1,41 +1,49 @@
-﻿using System.Data;
-using System.Text.Json;
+﻿using System.Data.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
-using Paramore.Brighter.Extensions.Hosting;
-using Paramore.Brighter.MessagingGateway.RMQ;
+using Paramore.Brighter.MessagingGateway.RMQ.Async;
+using Paramore.Brighter.Outbox.Hosting;
 using Paramore.Brighter.Outbox.PostgreSql;
 using Paramore.Brighter.PostgreSql;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
 
-const string ConnectionString = "Host=localhost;Username=postgres;Password=password;Database=brightertests;";
-await using (NpgsqlConnection connection = new(ConnectionString))
+const string connectionString = "Host=localhost;Username=postgres;Password=password;Database=brightertests;";
+await using (NpgsqlConnection connection = new(connectionString))
 {
     await connection.OpenAsync();
-    await using NpgsqlCommand command = connection.CreateCommand();
+    await using var command = connection.CreateCommand();
     command.CommandText =
       """
       CREATE TABLE IF NOT EXISTS "outboxmessages"
       (
-        "id" BIGSERIAL NOT NULL,
-        "messageid" UUID NOT NULL,
-        "topic" VARCHAR(255) NULL,
-        "messagetype" VARCHAR(32) NULL,
-        "timestamp" TIMESTAMP NULL,
-        "correlationid" UUID NULL,
-        "replyto" VARCHAR(255) NULL,
-        "contenttype" VARCHAR(128) NULL,
-        "dispatched" TIMESTAMP NULL,
-        "headerbag" TEXT NULL,
-        "body" TEXT NULL,
-        PRIMARY KEY (Id)
-      );
+        Id bigserial PRIMARY KEY,
+        MessageId character varying(255) UNIQUE NOT NULL,
+        Topic character varying(255) NULL,
+        MessageType character varying(32) NULL,
+        Timestamp timestamptz NULL,
+        CorrelationId character varying(255) NULL,
+        ReplyTo character varying(255) NULL,
+        ContentType character varying(128) NULL,
+        PartitionKey character varying(128) NULL,  
+        WorkflowId character varying(255) NULL,
+        JobId character varying(255) NULL,
+        Dispatched timestamptz NULL,
+        HeaderBag text NULL,
+        Body text NULL,
+        Source character varying (255) NULL,
+        Type character varying (255) NULL,
+        DataSchema character varying (255) NULL,
+        Subject character varying (255) NULL,
+        TraceParent character varying (255) NULL,
+        TraceState character varying (255) NULL,
+        Baggage text NULL
+      ); 
       """;
 
     _ = await command.ExecuteNonQueryAsync();
@@ -48,71 +56,76 @@ Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
     .CreateLogger();
 
-
-IHost host = new HostBuilder()
+var host = new HostBuilder()
     .UseSerilog()
     .ConfigureServices(
-        (ctx, services) =>
+        (_, services) =>
         {
-            RmqMessagingGatewayConnection connection = new()
+            var connection = new RmqMessagingGatewayConnection
             {
                 AmpqUri = new AmqpUriSpecification(new Uri("amqp://guest:guest@localhost:5672")),
                 Exchange = new Exchange("paramore.brighter.exchange"),
             };
 
-            _ = services
+            var outbox =
+                new PostgreSqlOutbox(
+                    new RelationalDatabaseConfiguration(connectionString, "brightertests", "outboxmessages"));
+
+            services
                 .AddHostedService<ServiceActivatorHostedService>()
-                .AddServiceActivator(opt =>
+                .AddSingleton<IAmARelationalDatabaseConfiguration>(new RelationalDatabaseConfiguration(connectionString, "brightertests" ,"outboxmessages"))
+                .AddSingleton<IAmAnOutbox>(outbox)
+                .AddConsumers(opt =>
                 {
                     opt.Subscriptions =
                     [
                         new RmqSubscription<OrderPlaced>(
-                            new SubscriptionName("subscription"),
-                            new ChannelName("queue-order-placed"),
-                            new RoutingKey("order-placed"),
+                            new SubscriptionName("subscription-orderplaced"),
+                            new ChannelName("order-placed-queue"),
+                            new RoutingKey("order-placed-topic"),
                             makeChannels: OnMissingChannel.Create,
-                            runAsync: true
-
+                            messagePumpType: MessagePumpType.Reactor
                         ),
 
                         new RmqSubscription<OrderPaid>(
-                            new SubscriptionName("subscription"),
-                            new ChannelName("queue-order-paid"),
-                            new RoutingKey("order-paid"),
+                            new SubscriptionName("subscription-orderpaid"),
+                            new ChannelName("order-paid-queue"),
+                            new RoutingKey("order-paid-topic"),
                             makeChannels: OnMissingChannel.Create,
-                            runAsync: true
+                            messagePumpType: MessagePumpType.Reactor
                         ),
                     ];
-
-
-                    opt.ChannelFactory = new ChannelFactory(
-                        new RmqMessageConsumerFactory(connection)
-                    );
+                    
+                    opt.DefaultChannelFactory = new ChannelFactory(new RmqMessageConsumerFactory(connection));
                 })
                 .AutoFromAssemblies()
-                .UsePostgreSqlOutbox(new PostgreSqlOutboxConfiguration(ConnectionString, "OutboxMessages"))
+                .AddProducers(opt =>
+                {
+                    opt.ConnectionProvider = typeof(PostgreSqlUnitOfWork);
+                    opt.TransactionProvider = typeof(PostgreSqlUnitOfWork);
+                    opt.Outbox = outbox;
+                    opt.ProducerRegistry = new RmqProducerRegistryFactory(
+                        connection,
+                        [
+                            new RmqPublication<OrderPaid>
+                            {
+                                MakeChannels = OnMissingChannel.Create,
+                                Topic = new RoutingKey("order-paid-topic"),
+                            },
+                            new RmqPublication<OrderPlaced>
+                            {
+                                MakeChannels = OnMissingChannel.Create,
+                                Topic = new RoutingKey("order-placed-topic"),
+
+                            },
+                        ]).Create();
+                })
                 .UseOutboxSweeper(opt =>
                 {
                     opt.BatchSize = 10;
                 })
-                .UseExternalBus(
-                    new RmqProducerRegistryFactory(
-                        connection,
-                        [
-                            new RmqPublication
-                            {
-                                MakeChannels = OnMissingChannel.Create,
-                                Topic = new RoutingKey("order-paid"),
-                            },
-                            new RmqPublication
-                            {
-                                MakeChannels = OnMissingChannel.Create,
-                                Topic = new RoutingKey("order-placed"),
-
-                            },
-                        ]
-                    ).Create()
-                );
+                .UseOutboxArchiver<DbTransaction>(new NullOutboxArchiveProvider(),
+                    opt => opt.MinimumAge = TimeSpan.FromMinutes(1));
         }
     )
     .Build();
@@ -126,7 +139,7 @@ while (!cancellationTokenSource.IsCancellationRequested)
 {
     await Task.Delay(TimeSpan.FromSeconds(10));
     Console.Write("Type an order value (or q to quit): ");
-    string? tmp = Console.ReadLine();
+    var tmp = Console.ReadLine();
 
     if (string.IsNullOrEmpty(tmp))
     {
@@ -138,38 +151,39 @@ while (!cancellationTokenSource.IsCancellationRequested)
         break;
     }
 
-    if (!decimal.TryParse(tmp, out decimal value))
+    if (!decimal.TryParse(tmp, out var value))
     {
         continue;
     }
 
     try
     {
-        using IServiceScope scope = host.Services.CreateScope();
-        IAmACommandProcessor process = scope.ServiceProvider.GetRequiredService<IAmACommandProcessor>();
+        using var scope = host.Services.CreateScope();
+        var process = scope.ServiceProvider.GetRequiredService<IAmACommandProcessor>();
         await process.SendAsync(new CreateNewOrder { Value = value });
     }
-    catch
+    catch(Exception ex)
     {
+        Console.WriteLine($"Error: {ex}");
         // ignore any error
     }
 }
 
 await host.StopAsync();
 
-public class CreateNewOrder() : Command(Guid.NewGuid())
+public class CreateNewOrder() : Command(Id.Random())
 {
     public decimal Value { get; set; }
 }
 
-public class OrderPlaced() : Event(Guid.NewGuid())
+public class OrderPlaced() : Event(Id.Random())
 {
     public string OrderId { get; set; } = string.Empty;
 
     public decimal Value { get; set; }
 }
 
-public class OrderPaid() : Event(Guid.NewGuid())
+public class OrderPaid() : Event(Id.Random())
 {
     public string OrderId { get; set; } = string.Empty;
 }
@@ -181,19 +195,16 @@ public class CreateNewOrderHandler(IAmACommandProcessor commandProcessor,
     {
         try
         {
-            string id = Guid.NewGuid().ToString();
+            var id = Uuid.NewAsString();
             logger.LogInformation("Creating a new order: {OrderId}", id);
 
-            await Task.Delay(10, cancellationToken); // emulating an process
-
-            _ = commandProcessor.DepositPost(new OrderPlaced { OrderId = id, Value = command.Value });
+            await commandProcessor.DepositPostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
             if (command.Value % 3 == 0)
             {
                 throw new InvalidOperationException("invalid value");
             }
 
-            _ = commandProcessor.DepositPost(new OrderPaid { OrderId = id });
-
+            await commandProcessor.DepositPostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
             return await base.HandleAsync(command, cancellationToken);
         }
         catch (Exception ex)
@@ -204,62 +215,21 @@ public class CreateNewOrderHandler(IAmACommandProcessor commandProcessor,
     }
 }
 
-public class OrderPlaceHandler(ILogger<OrderPlaceHandler> logger) : RequestHandlerAsync<OrderPlaced>
+public class OrderPlaceHandler(ILogger<OrderPlaceHandler> logger) : RequestHandler<OrderPlaced>
 {
-    public override Task<OrderPlaced> HandleAsync(OrderPlaced command, CancellationToken cancellationToken = default)
+    public override OrderPlaced Handle(OrderPlaced command)
     {
-
         logger.LogInformation("{OrderId} placed with value {OrderValue}", command.OrderId, command.Value);
-        return base.HandleAsync(command, cancellationToken);
+        return base.Handle(command);
     }
 }
 
 
-public class OrderPaidHandler(ILogger<OrderPaidHandler> logger) : RequestHandlerAsync<OrderPaid>
+public class OrderPaidHandler(ILogger<OrderPaidHandler> logger) : RequestHandler<OrderPaid>
 {
-    public override Task<OrderPaid> HandleAsync(OrderPaid command, CancellationToken cancellationToken = default)
+    public override OrderPaid Handle(OrderPaid command)
     {
         logger.LogInformation("{OrderId} paid", command.OrderId);
-        return base.HandleAsync(command, cancellationToken);
-    }
-}
-
-public class OrderPlacedMapper : IAmAMessageMapper<OrderPlaced>
-{
-    public Message MapToMessage(OrderPlaced request)
-    {
-        var header = new MessageHeader();
-        header.Id = request.Id;
-        header.TimeStamp = DateTime.UtcNow;
-        header.Topic = "order-placed";
-        header.MessageType = MessageType.MT_EVENT;
-
-        var body = new MessageBody(JsonSerializer.Serialize(request));
-        return new Message(header, body);
-    }
-
-    public OrderPlaced MapToRequest(Message message)
-    {
-        return JsonSerializer.Deserialize<OrderPlaced>(message.Body.Bytes)!;
-    }
-}
-
-public class OrderPaidMapper : IAmAMessageMapper<OrderPaid>
-{
-    public Message MapToMessage(OrderPaid request)
-    {
-        var header = new MessageHeader();
-        header.Id = request.Id;
-        header.TimeStamp = DateTime.UtcNow;
-        header.Topic = "order-paid";
-        header.MessageType = MessageType.MT_EVENT;
-
-        var body = new MessageBody(JsonSerializer.Serialize(request));
-        return new Message(header, body);
-    }
-
-    public OrderPaid MapToRequest(Message message)
-    {
-        return JsonSerializer.Deserialize<OrderPaid>(message.Body.Bytes)!;
+        return base.Handle(command);
     }
 }
