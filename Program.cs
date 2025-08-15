@@ -1,23 +1,21 @@
-﻿using System.Data;
-using System.Text.Json;
+﻿using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
-using Paramore.Brighter.Extensions.Hosting;
-using Paramore.Brighter.MessagingGateway.RMQ;
+using Paramore.Brighter.MessagingGateway.Redis;
+using Paramore.Brighter.Outbox.Hosting;
 using Paramore.Brighter.Outbox.Sqlite;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Paramore.Brighter.Sqlite;
 using Serilog;
 
-const string ConnectionString = "Data Source=brighter.db";
+const string connectionString = "Data Source=brighter.db";
 
-await using (SqliteConnection connection = new(ConnectionString))
+await using (SqliteConnection connection = new(connectionString))
 {
     await connection.OpenAsync();
 
@@ -26,16 +24,25 @@ await using (SqliteConnection connection = new(ConnectionString))
       """
       CREATE TABLE IF NOT EXISTS "outbox_messages"(
         [MessageId] TEXT NOT NULL COLLATE NOCASE,
-        [Topic] TEXT NULL,
         [MessageType] TEXT NULL,
+        [Topic] TEXT NULL,
         [Timestamp] TEXT NULL,
         [CorrelationId] TEXT NULL,
         [ReplyTo] TEXT NULL,
         [ContentType] TEXT NULL,  
+        [PartitionKey] TEXT NULL,
+        [WorkflowId] TEXT NULL,
+        [JobId] TEXT NULL,
         [Dispatched] TEXT NULL,
         [HeaderBag] TEXT NULL,
-        [Body] TEXT NULL,
-        CONSTRAINT[PK_MessageId] PRIMARY KEY([MessageId])
+        [Body] BLOB NULL,
+        [Source] TEXT NULL,
+        [Type] TEXT NULL,
+        [DataSchema] TEXT NULL,
+        [Subject] TEXT NULL,
+        [TraceParent] TEXT NULL,
+        [TraceState] TEXT NULL,
+        [Baggage] TEXT NULL
       );
       """;
     // MessageId, MessageType, Topic, Timestamp, CorrelationId, ReplyTo, ContentType, HeaderBag, Body
@@ -55,68 +62,67 @@ IHost host = new HostBuilder()
     .ConfigureServices(
         (ctx, services) =>
         {
-            RmqMessagingGatewayConnection connection = new()
+            var connection = new RedisMessagingGatewayConfiguration
             {
-                AmpqUri = new AmqpUriSpecification(new Uri("amqp://guest:guest@localhost:5672")),
-
-                Exchange = new Exchange("paramore.brighter.exchange"),
+                RedisConnectionString = "localhost:6379?connectTimeout=1000&sendTimeout=1000&",
+                MaxPoolSize = 10,
+                MessageTimeToLive = TimeSpan.FromMinutes(10)
             };
+            
+            var configuration = new RelationalDatabaseConfiguration(connectionString, "brighter", "outbox_messages", binaryMessagePayload: true);
 
             services
-              .AddScoped<SqliteUnitOfWork, SqliteUnitOfWork>()
-              .TryAddScoped<IUnitOfWork>(provider => provider.GetRequiredService<SqliteUnitOfWork>());
-
-            _ = services
+                .AddSingleton<IAmARelationalDatabaseConfiguration >(configuration)
                 .AddHostedService<ServiceActivatorHostedService>()
-                .AddServiceActivator(opt =>
+                .AddConsumers(opt =>
                 {
                     opt.Subscriptions =
                     [
-                        new RmqSubscription<OrderPlaced>(
+                        new RedisSubscription<OrderPlaced>(
                             new SubscriptionName("subscription"),
                             new ChannelName("queue-order-placed"),
                             new RoutingKey("order-placed"),
                             makeChannels: OnMissingChannel.Create,
-                            runAsync: true
+                            messagePumpType: MessagePumpType.Proactor 
                         ),
 
-                        new RmqSubscription<OrderPaid>(
+                        new RedisSubscription<OrderPaid>(
                             new SubscriptionName("subscription"),
                             new ChannelName("queue-order-paid"),
                             new RoutingKey("order-paid"),
                             makeChannels: OnMissingChannel.Create,
-                            runAsync: true
+                            messagePumpType: MessagePumpType.Proactor
                         ),
                     ];
 
-                    opt.ChannelFactory = new ChannelFactory(
-                        new RmqMessageConsumerFactory(connection)
+                    opt.DefaultChannelFactory = new ChannelFactory(
+                        new RedisMessageConsumerFactory(connection)
                     );
                 })
                 .AutoFromAssemblies()
-                .UseSqliteOutbox(new SqliteConfiguration(ConnectionString, "outbox_messages"), typeof(SqliteConnectionProvider), ServiceLifetime.Scoped)
-                .UseSqliteTransactionConnectionProvider(typeof(SqliteConnectionProvider))
-                .UseOutboxSweeper(opt =>
+                .AddProducers(opt =>
                 {
-                    opt.BatchSize = 10;
-                })
-                .UseExternalBus(
-                    new RmqProducerRegistryFactory(
+                    opt.Outbox = new SqliteOutbox(configuration);
+                    opt.ConnectionProvider = typeof(SqliteConnectionProvider);
+                    opt.TransactionProvider = typeof(SqliteUnitOfWork);
+                    
+                    opt.ProducerRegistry = new RedisProducerRegistryFactory(
                         connection,
                         [
-                            new RmqPublication
+                            new RedisMessagePublication<OrderPaid>
                             {
                                 MakeChannels = OnMissingChannel.Create,
                                 Topic = new RoutingKey("order-paid"),
                             },
-                            new RmqPublication
+                            new RedisMessagePublication<OrderPlaced>
                             {
                                 MakeChannels = OnMissingChannel.Create,
                                 Topic = new RoutingKey("order-placed"),
                             },
-                        ]
-                    ).Create()
-                );
+                        ]).Create();
+                })
+                .UseOutboxSweeper(opt => { opt.BatchSize = 10; })
+                .UseOutboxArchiver<DbTransaction>(new NullOutboxArchiveProvider());
 
         }
     )
@@ -131,9 +137,8 @@ Console.CancelKeyPress += (_, _) => cancellationTokenSource.Cancel();
 
 while (!cancellationTokenSource.IsCancellationRequested)
 {
-    await Task.Delay(TimeSpan.FromSeconds(10));
     Console.Write("Type an order value (or q to quit): ");
-    string? tmp = Console.ReadLine();
+    var tmp = Console.ReadLine();
 
     if (string.IsNullOrEmpty(tmp))
     {
@@ -145,7 +150,7 @@ while (!cancellationTokenSource.IsCancellationRequested)
         break;
     }
 
-    if (!decimal.TryParse(tmp, out decimal value))
+    if (!decimal.TryParse(tmp, out var value))
     {
         continue;
     }
@@ -164,52 +169,46 @@ while (!cancellationTokenSource.IsCancellationRequested)
 
 await host.StopAsync();
 
-public class CreateNewOrder() : Command(Guid.NewGuid())
+public class CreateNewOrder() : Command(Id.Random())
 {
     public decimal Value { get; set; }
 }
 
-public class OrderPlaced() : Event(Guid.NewGuid())
+public class OrderPlaced() : Event(Id.Random())
 {
     public string OrderId { get; set; } = string.Empty;
     public decimal Value { get; set; }
 }
 
 
-public class OrderPaid() : Event(Guid.NewGuid())
+public class OrderPaid() : Event(Id.Random())
 {
     public string OrderId { get; set; } = string.Empty;
 }
 
 public class CreateNewOrderHandler(IAmACommandProcessor commandProcessor,
-    IUnitOfWork unitOfWork,
     ILogger<CreateNewOrderHandler> logger) : RequestHandlerAsync<CreateNewOrder>
 {
     public override async Task<CreateNewOrder> HandleAsync(CreateNewOrder command, CancellationToken cancellationToken = default)
     {
-        await unitOfWork.BeginTransactionAsync();
         try
         {
-            var id = Guid.NewGuid().ToString();
+            var id = Uuid.NewAsString();
             logger.LogInformation("Creating a new order: {OrderId}", id);
 
-            await Task.Delay(10, cancellationToken); // emulating an process
-
-            _ = await commandProcessor.DepositPostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
+            await commandProcessor.DepositPostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
             if (command.Value % 3 == 0)
             {
                 throw new InvalidOperationException("invalid value");
             }
 
-            _ = await commandProcessor.DepositPostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
+            await commandProcessor.DepositPostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
 
-            await unitOfWork.CommitAsync(cancellationToken);
             return await base.HandleAsync(command, cancellationToken);
         }
-        catch
+        catch(Exception ex)
         {
-            logger.LogError("Invalid data");
-            await unitOfWork.RollbackAsync(cancellationToken);
+            logger.LogError(ex, "Invalid data");
             throw;
         }
     }
@@ -230,111 +229,5 @@ public class OrderPaidHandler(ILogger<OrderPaidHandler> logger) : RequestHandler
     {
         logger.LogInformation("{OrderId} paid", command.OrderId);
         return base.HandleAsync(command, cancellationToken);
-    }
-}
-
-public class OrderPlacedMapper : IAmAMessageMapper<OrderPlaced>
-{
-    public Message MapToMessage(OrderPlaced request)
-    {
-        var header = new MessageHeader();
-        header.Id = request.Id;
-        header.TimeStamp = DateTime.UtcNow;
-        header.Topic = "order-placed";
-        header.MessageType = MessageType.MT_EVENT;
-        header.ReplyTo = "";
-
-        var body = new MessageBody(JsonSerializer.Serialize(request));
-        return new Message(header, body);
-    }
-
-    public OrderPlaced MapToRequest(Message message)
-    {
-        return JsonSerializer.Deserialize<OrderPlaced>(message.Body.Bytes)!;
-    }
-}
-
-public class OrderPaidMapper : IAmAMessageMapper<OrderPaid>
-{
-    public Message MapToMessage(OrderPaid request)
-    {
-        var header = new MessageHeader();
-        header.Id = request.Id;
-        header.TimeStamp = DateTime.UtcNow;
-        header.Topic = "order-paid";
-        header.MessageType = MessageType.MT_EVENT;
-        header.ReplyTo = "";
-
-        var body = new MessageBody(JsonSerializer.Serialize(request));
-        return new Message(header, body);
-    }
-
-    public OrderPaid MapToRequest(Message message)
-    {
-        return JsonSerializer.Deserialize<OrderPaid>(message.Body.Bytes)!;
-    }
-}
-
-public class SqliteConnectionProvider(SqliteUnitOfWork sqlConnection) : ISqliteTransactionConnectionProvider
-{
-    public SqliteConnection GetConnection()
-    {
-        return sqlConnection.Connection;
-    }
-
-    public Task<SqliteConnection> GetConnectionAsync(CancellationToken cancellationToken = default)
-    {
-        return Task.FromResult(sqlConnection.Connection);
-    }
-
-    public SqliteTransaction? GetTransaction()
-    {
-        return sqlConnection.Transaction;
-    }
-
-    public bool HasOpenTransaction => sqlConnection.Transaction != null;
-    public bool IsSharedConnection => true;
-}
-
-public interface IUnitOfWork
-{
-    Task BeginTransactionAsync(IsolationLevel isolationLevel = IsolationLevel.Serializable);
-    Task CommitAsync(CancellationToken cancellationToken);
-    Task RollbackAsync(CancellationToken cancellationToken);
-}
-
-public class SqliteUnitOfWork : IUnitOfWork
-{
-    public SqliteUnitOfWork(SqliteConfiguration configuration)
-    {
-        Connection = new(configuration.ConnectionString);
-        Connection.Open();
-    }
-
-    public SqliteConnection Connection { get; }
-    public SqliteTransaction? Transaction { get; private set; }
-
-    public async Task BeginTransactionAsync(IsolationLevel isolationLevel = IsolationLevel.Serializable)
-    {
-        if (Transaction == null)
-        {
-            Transaction = (SqliteTransaction)await Connection.BeginTransactionAsync(isolationLevel);
-        }
-    }
-
-    public async Task CommitAsync(CancellationToken cancellationToken)
-    {
-        if (Transaction != null)
-        {
-            await Transaction.CommitAsync(cancellationToken);
-        }
-    }
-
-    public async Task RollbackAsync(CancellationToken cancellationToken)
-    {
-        if (Transaction != null)
-        {
-            await Transaction.RollbackAsync(cancellationToken);
-        }
     }
 }

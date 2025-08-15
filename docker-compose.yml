@@ -1,7 +1,5 @@
 services:
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    platform: linux/amd64
+  redis:
+    image: redis
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "6379:6379"
