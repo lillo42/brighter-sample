@@ -1,42 +1,49 @@
-﻿using System.Data;
-using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MySqlConnector;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
-using Paramore.Brighter.Extensions.Hosting;
-using Paramore.Brighter.MessagingGateway.RMQ;
+using Paramore.Brighter.MessagingGateway.Kafka;
 using Paramore.Brighter.MySql;
+using Paramore.Brighter.Outbox.Hosting;
 using Paramore.Brighter.Outbox.MySql;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
 
-const string ConnectionString = "server=127.0.0.1;uid=root;pwd=Password123!;database=brighter_test";
+const string connectionString = "server=127.0.0.1;uid=root;pwd=Password123!;database=brighter_test";
 
-using (MySqlConnection connection = new(ConnectionString))
+await using (MySqlConnection connection = new(connectionString))
 {
     await connection.OpenAsync();
 
-    using var command = connection.CreateCommand();
+    await using var command = connection.CreateCommand();
     command.CommandText =
       """
       CREATE TABLE IF NOT EXISTS `outbox_messages`(
-        `MessageId` CHAR(36) NOT NULL,
-        `Topic` VARCHAR(255) NOT NULL,
-        `MessageType` VARCHAR(32) NOT NULL,
-        `Timestamp` TIMESTAMP(3) NOT NULL,
-        `CorrelationId` CHAR(36) NULL,
-        `ReplyTo` VARCHAR(255) NULL,
-        `ContentType` VARCHAR(128) NULL,
-        `Dispatched` TIMESTAMP(3) NULL,
-        `HeaderBag` TEXT NOT NULL,
-        `Body` TEXT NOT NULL,
+        `MessageId`VARCHAR(255) NOT NULL , 
+        `Topic` VARCHAR(255) NOT NULL , 
+        `MessageType` VARCHAR(32) NOT NULL , 
+        `Timestamp` TIMESTAMP(3) NOT NULL , 
+        `CorrelationId`VARCHAR(255) NULL ,
+        `ReplyTo` VARCHAR(255) NULL ,
+        `ContentType` VARCHAR(128) NULL , 
+        `PartitionKey` VARCHAR(128) NULL , 
+        `WorkflowId` VARCHAR(255) NULL ,
+        `JobId` VARCHAR(255) NULL ,
+        `Dispatched` TIMESTAMP(3) NULL , 
+        `HeaderBag` TEXT NOT NULL , 
+        `Body` TEXT NOT NULL , 
+        `Source`  VARCHAR(255) NULL,
+        `Type`  VARCHAR(255) NULL,
+        `DataSchema`  VARCHAR(255) NULL,
+        `Subject`  VARCHAR(255) NULL,
+        `TraceParent`  VARCHAR(255) NULL,
+        `TraceState`  VARCHAR(255) NULL,
+        `Baggage`  TEXT NULL,
         `Created` TIMESTAMP(3) NOT NULL DEFAULT NOW(3),
-        `CreatedID` INT(11) NOT NULL AUTO_INCREMENT,
+        `CreatedID` INT(11) NOT NULL AUTO_INCREMENT, 
         UNIQUE(`CreatedID`),
         PRIMARY KEY (`MessageId`)
       );
@@ -52,73 +59,78 @@ Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
     .CreateLogger();
 
-IHost host = new HostBuilder()
+var host = new HostBuilder()
     .UseSerilog()
     .ConfigureServices(
         (ctx, services) =>
         {
-            RmqMessagingGatewayConnection connection = new()
+            var connection = new KafkaMessagingGatewayConfiguration
             {
-                AmpqUri = new AmqpUriSpecification(new Uri("amqp://guest:guest@localhost:5672")),
-
-                Exchange = new Exchange("paramore.brighter.exchange"),
+                Name = "sample",
+                BootStrapServers = ["localhost:9092"],
+                SaslUsername = "admin",
+                SaslPassword = "admin-secret",
+                SecurityProtocol = SecurityProtocol.Plaintext,
+                SaslMechanisms = SaslMechanism.Plain,
             };
 
-            services
-              .AddScoped<MySqlUnitOfWork, MySqlUnitOfWork>()
-              .TryAddScoped<IUnitOfWork>(provider => provider.GetRequiredService<MySqlUnitOfWork>());
 
-            _ = services
+            var configuration = new RelationalDatabaseConfiguration(connectionString,  "brighter_test", "outbox_messages");
+
+            services
+                .AddSingleton<IAmARelationalDatabaseConfiguration>(configuration)
                 .AddHostedService<ServiceActivatorHostedService>()
-                .AddServiceActivator(opt =>
+                .AddConsumers(opt =>
                 {
                     opt.Subscriptions =
                     [
-                        new RmqSubscription<OrderPlaced>(
+                        new KafkaSubscription<OrderPlaced>(
                             new SubscriptionName("subscription"),
-                            new ChannelName("queue-order-placed"),
+                            new ChannelName("order-placed"),
                             new RoutingKey("order-placed"),
+                            groupId: "brighter-sample",
                             makeChannels: OnMissingChannel.Create,
-                            runAsync: true
+                            messagePumpType: MessagePumpType.Proactor
                         ),
 
-                        new RmqSubscription<OrderPaid>(
+                        new KafkaSubscription<OrderPaid>(
                             new SubscriptionName("subscription"),
-                            new ChannelName("queue-order-paid"),
+                            new ChannelName("order-paid"),
                             new RoutingKey("order-paid"),
+                            groupId: "brighter-sample",
                             makeChannels: OnMissingChannel.Create,
-                            runAsync: true
-                        ),
+                            messagePumpType: MessagePumpType.Proactor
+                        )
                     ];
 
-                    opt.ChannelFactory = new ChannelFactory(
-                        new RmqMessageConsumerFactory(connection)
+                    opt.DefaultChannelFactory = new ChannelFactory(
+                        new KafkaMessageConsumerFactory(connection)
                     );
                 })
                 .AutoFromAssemblies()
-                .UseMySqlOutbox(new MySqlConfiguration(ConnectionString, "outbox_messages"), typeof(MySqlConnectionProvider), ServiceLifetime.Scoped)
-                .UseMySqTransactionConnectionProvider(typeof(MySqlConnectionProvider))
-                .UseOutboxSweeper(opt =>
+                .AddProducers(opt =>
                 {
-                    opt.BatchSize = 10;
-                })
-                .UseExternalBus(
-                    new RmqProducerRegistryFactory(
+                    opt.Outbox = new MySqlOutbox(configuration);
+                    opt.ConnectionProvider = typeof(MySqlConnectionProvider);
+                    opt.TransactionProvider = typeof(MySqlUnitOfWork);
+                    
+                    opt.ProducerRegistry = new KafkaProducerRegistryFactory(
                         connection,
                         [
-                            new RmqPublication
+                            new KafkaPublication<OrderPaid>
                             {
                                 MakeChannels = OnMissingChannel.Create,
                                 Topic = new RoutingKey("order-paid"),
                             },
-                            new RmqPublication
+                            new KafkaPublication<OrderPlaced>
                             {
                                 MakeChannels = OnMissingChannel.Create,
                                 Topic = new RoutingKey("order-placed"),
-                            },
+                            }
                         ]
-                    ).Create()
-                );
+                    ).Create();
+                })
+                .UseOutboxSweeper(opt => { opt.BatchSize = 10; });
 
         }
     )
@@ -133,9 +145,8 @@ Console.CancelKeyPress += (_, _) => cancellationTokenSource.Cancel();
 
 while (!cancellationTokenSource.IsCancellationRequested)
 {
-    await Task.Delay(TimeSpan.FromSeconds(10));
     Console.Write("Type an order value (or q to quit): ");
-    string? tmp = Console.ReadLine();
+    var tmp = Console.ReadLine();
 
     if (string.IsNullOrEmpty(tmp))
     {
@@ -147,15 +158,15 @@ while (!cancellationTokenSource.IsCancellationRequested)
         break;
     }
 
-    if (!decimal.TryParse(tmp, out decimal value))
+    if (!decimal.TryParse(tmp, out var value))
     {
         continue;
     }
 
     try
     {
-        using IServiceScope scope = host.Services.CreateScope();
-        IAmACommandProcessor process = scope.ServiceProvider.GetRequiredService<IAmACommandProcessor>();
+        using var scope = host.Services.CreateScope();
+        var process = scope.ServiceProvider.GetRequiredService<IAmACommandProcessor>();
         await process.SendAsync(new CreateNewOrder { Value = value });
     }
     catch
@@ -166,52 +177,44 @@ while (!cancellationTokenSource.IsCancellationRequested)
 
 await host.StopAsync();
 
-public class CreateNewOrder() : Command(Guid.NewGuid())
+public class CreateNewOrder() : Command(Id.Random())
 {
     public decimal Value { get; set; }
 }
 
-public class OrderPlaced() : Event(Guid.NewGuid())
+public class OrderPlaced() : Event(Id.Random())
 {
     public string OrderId { get; set; } = string.Empty;
     public decimal Value { get; set; }
 }
 
 
-public class OrderPaid() : Event(Guid.NewGuid())
+public class OrderPaid() : Event(Id.Random())
 {
     public string OrderId { get; set; } = string.Empty;
 }
 
-public class CreateNewOrderHandler(IAmACommandProcessor commandProcessor,
-    IUnitOfWork unitOfWork,
-    ILogger<CreateNewOrderHandler> logger) : RequestHandlerAsync<CreateNewOrder>
+public class CreateNewOrderHandler(IAmACommandProcessor commandProcessor, ILogger<CreateNewOrderHandler> logger) : RequestHandlerAsync<CreateNewOrder>
 {
     public override async Task<CreateNewOrder> HandleAsync(CreateNewOrder command, CancellationToken cancellationToken = default)
     {
-        await unitOfWork.BeginTransactionAsync(cancellationToken);
         try
         {
-            string id = Guid.NewGuid().ToString();
+            var id = Uuid.NewAsString();
             logger.LogInformation("Creating a new order: {OrderId}", id);
 
-            await Task.Delay(10, cancellationToken); // emulating an process
-
-            _ = await commandProcessor.DepositPostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
+            await commandProcessor.DepositPostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
             if (command.Value % 3 == 0)
             {
                 throw new InvalidOperationException("invalid value");
             }
 
-            _ = await commandProcessor.DepositPostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
-
-            await unitOfWork.CommitAsync(cancellationToken);
+            await commandProcessor.DepositPostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
             return await base.HandleAsync(command, cancellationToken);
         }
-        catch
+        catch(Exception ex)
         {
-            logger.LogError("Invalid data");
-            await unitOfWork.RollbackAsync(cancellationToken);
+            logger.LogError(ex, "Invalid data");
             throw;
         }
     }
@@ -232,129 +235,5 @@ public class OrderPaidHandler(ILogger<OrderPaidHandler> logger) : RequestHandler
     {
         logger.LogInformation("{OrderId} paid", command.OrderId);
         return base.HandleAsync(command, cancellationToken);
-    }
-}
-
-public class OrderPlacedMapper : IAmAMessageMapper<OrderPlaced>
-{
-    public Message MapToMessage(OrderPlaced request)
-    {
-        var header = new MessageHeader();
-        header.Id = request.Id;
-        header.TimeStamp = DateTime.UtcNow;
-        header.Topic = "order-placed";
-        header.MessageType = MessageType.MT_EVENT;
-
-        var body = new MessageBody(JsonSerializer.Serialize(request));
-        return new Message(header, body);
-    }
-
-    public OrderPlaced MapToRequest(Message message)
-    {
-        return JsonSerializer.Deserialize<OrderPlaced>(message.Body.Bytes)!;
-    }
-}
-
-public class OrderPaidMapper : IAmAMessageMapper<OrderPaid>
-{
-    public Message MapToMessage(OrderPaid request)
-    {
-        var header = new MessageHeader();
-        header.Id = request.Id;
-        header.TimeStamp = DateTime.UtcNow;
-        header.Topic = "order-paid";
-        header.MessageType = MessageType.MT_EVENT;
-
-        var body = new MessageBody(JsonSerializer.Serialize(request));
-        return new Message(header, body);
-    }
-
-    public OrderPaid MapToRequest(Message message)
-    {
-        return JsonSerializer.Deserialize<OrderPaid>(message.Body.Bytes)!;
-    }
-}
-
-public class MySqlConnectionProvider(MySqlUnitOfWork sqlConnection) : IMySqlTransactionConnectionProvider
-{
-    private readonly MySqlUnitOfWork _sqlConnection = sqlConnection;
-
-    public MySqlConnection GetConnection()
-    {
-        return _sqlConnection.Connection;
-    }
-
-    public Task<MySqlConnection> GetConnectionAsync(CancellationToken cancellationToken = default)
-    {
-        return Task.FromResult(_sqlConnection.Connection);
-    }
-
-    public MySqlTransaction? GetTransaction()
-    {
-        return _sqlConnection.Transaction;
-    }
-
-    public bool HasOpenTransaction => _sqlConnection.Transaction != null;
-    public bool IsSharedConnection => true;
-}
-
-public interface IUnitOfWork
-{
-    Task BeginTransactionAsync(CancellationToken cancellationToken, IsolationLevel isolationLevel = IsolationLevel.Serializable);
-    Task CommitAsync(CancellationToken cancellationToken);
-    Task RollbackAsync(CancellationToken cancellationToken);
-}
-
-public class MySqlUnitOfWork : IUnitOfWork
-{
-    public MySqlUnitOfWork(MySqlConfiguration configuration)
-    {
-        Connection = new(configuration.ConnectionString);
-        Connection.Open();
-    }
-
-    public MySqlConnection Connection { get; }
-    public MySqlTransaction? Transaction { get; private set; }
-
-    public async Task BeginTransactionAsync(CancellationToken cancellationToken, IsolationLevel isolationLevel = IsolationLevel.Serializable)
-    {
-        if (Transaction == null)
-        {
-            Transaction = await Connection.BeginTransactionAsync(isolationLevel);
-        }
-    }
-
-    public async Task CommitAsync(CancellationToken cancellationToken)
-    {
-        if (Transaction != null)
-        {
-            await Transaction.CommitAsync(cancellationToken);
-        }
-    }
-
-    public async Task RollbackAsync(CancellationToken cancellationToken)
-    {
-        if (Transaction != null)
-        {
-            await Transaction.RollbackAsync(cancellationToken);
-        }
-    }
-
-    public Task<MySqlCommand> CreateSqlCommandAsync(string sql, MySqlParameter[] parameters, CancellationToken cancellationToken)
-    {
-        var command = Connection.CreateCommand();
-
-        if (Transaction != null)
-        {
-            command.Transaction = Transaction;
-        }
-
-        command.CommandText = sql;
-        if (parameters.Length > 0)
-        {
-            command.Parameters.AddRange(parameters);
-        }
-
-        return Task.FromResult(command);
     }
 }
