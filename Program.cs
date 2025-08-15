@@ -1,14 +1,11 @@
-﻿using System.Data.Common;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
+using Paramore.Brighter.Inbox.Postgres;
 using Paramore.Brighter.MessagingGateway.RMQ.Async;
-using Paramore.Brighter.Outbox.Hosting;
-using Paramore.Brighter.Outbox.PostgreSql;
-using Paramore.Brighter.PostgreSql;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
@@ -20,29 +17,14 @@ await using (NpgsqlConnection connection = new(connectionString))
     await using var command = connection.CreateCommand();
     command.CommandText =
       """
-      CREATE TABLE IF NOT EXISTS "outboxmessages"
+      CREATE TABLE IF NOT EXISTS "inboxmessages"
       (
-        Id bigserial PRIMARY KEY,
-        MessageId character varying(255) UNIQUE NOT NULL,
-        Topic character varying(255) NULL,
-        MessageType character varying(32) NULL,
-        Timestamp timestamptz NULL,
-        CorrelationId character varying(255) NULL,
-        ReplyTo character varying(255) NULL,
-        ContentType character varying(128) NULL,
-        PartitionKey character varying(128) NULL,  
-        WorkflowId character varying(255) NULL,
-        JobId character varying(255) NULL,
-        Dispatched timestamptz NULL,
-        HeaderBag text NULL,
-        Body text NULL,
-        Source character varying (255) NULL,
-        Type character varying (255) NULL,
-        DataSchema character varying (255) NULL,
-        Subject character varying (255) NULL,
-        TraceParent character varying (255) NULL,
-        TraceState character varying (255) NULL,
-        Baggage text NULL
+        CommandId VARCHAR(256) NOT NULL ,
+        CommandType VARCHAR(256) NULL ,
+        CommandBody TEXT NULL ,
+        Timestamp timestamptz  NULL ,
+        ContextKey VARCHAR(256) NULL,
+        PRIMARY KEY (CommandId, ContextKey)
       ); 
       """;
 
@@ -51,7 +33,7 @@ await using (NpgsqlConnection connection = new(connectionString))
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
-    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Debug)
     .Enrich.FromLogContext()
     .WriteTo.Console()
     .CreateLogger();
@@ -67,16 +49,13 @@ var host = new HostBuilder()
                 Exchange = new Exchange("paramore.brighter.exchange"),
             };
 
-            var outbox =
-                new PostgreSqlOutbox(
-                    new RelationalDatabaseConfiguration(connectionString, "brightertests", "outboxmessages"));
-
             services
                 .AddHostedService<ServiceActivatorHostedService>()
-                .AddSingleton<IAmARelationalDatabaseConfiguration>(new RelationalDatabaseConfiguration(connectionString, "brightertests" ,"outboxmessages"))
-                .AddSingleton<IAmAnOutbox>(outbox)
                 .AddConsumers(opt =>
                 {
+                    opt.InboxConfiguration = new InboxConfiguration(
+                        new PostgreSqlInbox(new RelationalDatabaseConfiguration(connectionString, "brightertests", inboxTableName: "inboxmessages")));
+                    
                     opt.Subscriptions =
                     [
                         new RmqSubscription<OrderPlaced>(
@@ -101,9 +80,6 @@ var host = new HostBuilder()
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
-                    opt.ConnectionProvider = typeof(PostgreSqlUnitOfWork);
-                    opt.TransactionProvider = typeof(PostgreSqlUnitOfWork);
-                    opt.Outbox = outbox;
                     opt.ProducerRegistry = new RmqProducerRegistryFactory(
                         connection,
                         [
@@ -119,13 +95,7 @@ var host = new HostBuilder()
 
                             },
                         ]).Create();
-                })
-                .UseOutboxSweeper(opt =>
-                {
-                    opt.BatchSize = 10;
-                })
-                .UseOutboxArchiver<DbTransaction>(new NullOutboxArchiveProvider(),
-                    opt => opt.MinimumAge = TimeSpan.FromMinutes(1));
+                });
         }
     )
     .Build();
