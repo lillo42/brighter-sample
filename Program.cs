@@ -4,10 +4,8 @@ using Microsoft.Extensions.Logging;
 using MySqlConnector;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
+using Paramore.Brighter.Inbox.MySql;
 using Paramore.Brighter.MessagingGateway.Kafka;
-using Paramore.Brighter.MySql;
-using Paramore.Brighter.Outbox.Hosting;
-using Paramore.Brighter.Outbox.MySql;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
@@ -21,31 +19,13 @@ await using (MySqlConnection connection = new(connectionString))
     await using var command = connection.CreateCommand();
     command.CommandText =
       """
-      CREATE TABLE IF NOT EXISTS `outbox_messages`(
-        `MessageId`VARCHAR(255) NOT NULL , 
-        `Topic` VARCHAR(255) NOT NULL , 
-        `MessageType` VARCHAR(32) NOT NULL , 
-        `Timestamp` TIMESTAMP(3) NOT NULL , 
-        `CorrelationId`VARCHAR(255) NULL ,
-        `ReplyTo` VARCHAR(255) NULL ,
-        `ContentType` VARCHAR(128) NULL , 
-        `PartitionKey` VARCHAR(128) NULL , 
-        `WorkflowId` VARCHAR(255) NULL ,
-        `JobId` VARCHAR(255) NULL ,
-        `Dispatched` TIMESTAMP(3) NULL , 
-        `HeaderBag` TEXT NOT NULL , 
-        `Body` TEXT NOT NULL , 
-        `Source`  VARCHAR(255) NULL,
-        `Type`  VARCHAR(255) NULL,
-        `DataSchema`  VARCHAR(255) NULL,
-        `Subject`  VARCHAR(255) NULL,
-        `TraceParent`  VARCHAR(255) NULL,
-        `TraceState`  VARCHAR(255) NULL,
-        `Baggage`  TEXT NULL,
-        `Created` TIMESTAMP(3) NOT NULL DEFAULT NOW(3),
-        `CreatedID` INT(11) NOT NULL AUTO_INCREMENT, 
-        UNIQUE(`CreatedID`),
-        PRIMARY KEY (`MessageId`)
+      CREATE TABLE IF NOT EXISTS `inbox_messages`(
+       `CommandId` VARCHAR(255) NOT NULL , 
+        `CommandType` VARCHAR(256) NOT NULL , 
+        `CommandBody` TEXT NOT NULL , 
+        `Timestamp` TIMESTAMP(4) NOT NULL , 
+        `ContextKey` VARCHAR(256)  NULL , 
+        PRIMARY KEY (`CommandId`)
       );
       """;
     _ = await command.ExecuteNonQueryAsync();
@@ -54,7 +34,7 @@ await using (MySqlConnection connection = new(connectionString))
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
-    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Debug)
     .Enrich.FromLogContext()
     .WriteTo.Console()
     .CreateLogger();
@@ -74,14 +54,14 @@ var host = new HostBuilder()
                 SaslMechanisms = SaslMechanism.Plain,
             };
 
-
-            var configuration = new RelationalDatabaseConfiguration(connectionString,  "brighter_test", "outbox_messages");
+            var configuration = new RelationalDatabaseConfiguration(connectionString,  "brighter_test", inboxTableName: "inbox_messages");
 
             services
-                .AddSingleton<IAmARelationalDatabaseConfiguration>(configuration)
                 .AddHostedService<ServiceActivatorHostedService>()
                 .AddConsumers(opt =>
                 {
+                    
+                    opt.InboxConfiguration = new InboxConfiguration(new MySqlInbox(configuration));
                     opt.Subscriptions =
                     [
                         new KafkaSubscription<OrderPlaced>(
@@ -110,10 +90,6 @@ var host = new HostBuilder()
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
-                    opt.Outbox = new MySqlOutbox(configuration);
-                    opt.ConnectionProvider = typeof(MySqlConnectionProvider);
-                    opt.TransactionProvider = typeof(MySqlUnitOfWork);
-                    
                     opt.ProducerRegistry = new KafkaProducerRegistryFactory(
                         connection,
                         [
@@ -129,9 +105,7 @@ var host = new HostBuilder()
                             }
                         ]
                     ).Create();
-                })
-                .UseOutboxSweeper(opt => { opt.BatchSize = 10; });
-
+                });
         }
     )
     .Build();
@@ -203,13 +177,13 @@ public class CreateNewOrderHandler(IAmACommandProcessor commandProcessor, ILogge
             var id = Uuid.NewAsString();
             logger.LogInformation("Creating a new order: {OrderId}", id);
 
-            await commandProcessor.DepositPostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
+            await commandProcessor.PostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
             if (command.Value % 3 == 0)
             {
                 throw new InvalidOperationException("invalid value");
             }
 
-            await commandProcessor.DepositPostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
+            await commandProcessor.PostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
             return await base.HandleAsync(command, cancellationToken);
         }
         catch(Exception ex)

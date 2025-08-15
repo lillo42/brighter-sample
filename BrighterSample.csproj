@@ -9,12 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Paramore.Brighter.MessagingGateway.Kafka" Version="10.0.0-preview.8" />
-    <PackageReference Include="Paramore.Brighter.Outbox.Hosting" Version="10.0.0-preview.8" />
-    <PackageReference Include="Paramore.Brighter.Outbox.MySql" Version="10.0.0-preview.8" />
-    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.0.0-preview.8" />
-    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.0-preview.8" />
-    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+      <PackageReference Include="Paramore.Brighter.Inbox.MySql" Version="10.0.0-preview.8" />
+      <PackageReference Include="Paramore.Brighter.MessagingGateway.Kafka" Version="10.0.0-preview.8" />
+      <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.0.0-preview.8" />
+      <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.0-preview.8" />
+      <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
   </ItemGroup>
 
 </Project>
