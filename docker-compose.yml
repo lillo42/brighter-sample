@@ -1,0 +1,8 @@
+﻿services:
+  localstack:
+    image: localstack/localstack
+    environment:
+      - "SERVICES=s3,sqs,sns,sts,dynamodb,iam,scheduler"
+    ports:
+      - "4566:4566" # LocalStack Gateway
+      - "4510-4559:4510-4559" # External services port range
