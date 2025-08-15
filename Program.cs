@@ -9,8 +9,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
-using Paramore.Brighter.Inbox.DynamoDB;
-using Paramore.Brighter.MessagingGateway.AWSSQS;
+using Paramore.Brighter.Inbox.DynamoDB.V4;
+using Paramore.Brighter.MessagingGateway.AWS.V4;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
@@ -36,7 +36,6 @@ var host = new HostBuilder()
             });
 
             services
-                .AddSingleton<IAmazonDynamoDB>(dynamoDbClient)
                 .AddHostedService<ServiceActivatorHostedService>()
                 .AddConsumers(opt =>
                 {
@@ -46,19 +45,19 @@ var host = new HostBuilder()
                     opt.Subscriptions =
                     [
                         new SqsSubscription<OrderPlaced>(
-                            new SubscriptionName("subscription"),
-                            new ChannelName("queue-order-placed"),
-                            ChannelType.PubSub,
-                            new RoutingKey("order-placed"),
+                            subscriptionName: new SubscriptionName("subscription"),
+                            channelName: new ChannelName("queue-order-placed"),
+                            channelType: ChannelType.PubSub,
+                            routingKey: new RoutingKey("order-placed"),
                             makeChannels: OnMissingChannel.Create,
                             messagePumpType: MessagePumpType.Reactor
                         ),
 
                         new SqsSubscription<OrderPaid>(
-                            new SubscriptionName("subscription"),
-                            new ChannelName("queue-order-paid"),
-                            ChannelType.PubSub,
-                            new RoutingKey("order-paid"),
+                            subscriptionName:new SubscriptionName("subscription"),
+                            channelName: new ChannelName("queue-order-paid"),
+                            channelType: ChannelType.PubSub,
+                            routingKey: new RoutingKey("order-paid"),
                             makeChannels: OnMissingChannel.Create,
                             messagePumpType: MessagePumpType.Reactor
                         ),
