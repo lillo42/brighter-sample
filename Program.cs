@@ -1,15 +1,11 @@
-﻿using System.Data.Common;
-using Microsoft.Data.SqlClient;
+﻿using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
+using Paramore.Brighter.Inbox.MsSql;
 using Paramore.Brighter.MessagingGateway.RMQ.Sync;
-using Paramore.Brighter.MsSql;
-using Paramore.Brighter.Outbox.Hosting;
-using Paramore.Brighter.Outbox.MsSql;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
@@ -38,32 +34,16 @@ await using (SqlConnection connection = new(connectionString))
     await using var command = connection.CreateCommand();
     command.CommandText =
       """
-      IF OBJECT_ID('OutboxMessages', 'U') IS NULL
+      IF OBJECT_ID('InboxMessages', 'U') IS NULL
       BEGIN 
-        CREATE TABLE [OutboxMessages]
+        CREATE TABLE [InboxMessages]
         (
-          [Id] [BIGINT] NOT NULL IDENTITY,
-          [MessageId] NVARCHAR(255) NOT NULL,
-          [Topic] NVARCHAR(255) NULL,
-          [MessageType] NVARCHAR(32) NULL,
-          [Timestamp] DATETIME NULL,
-          [CorrelationId] NVARCHAR(255) NULL,
-          [ReplyTo] NVARCHAR(255) NULL,
-          [ContentType] NVARCHAR(128) NULL,  
-          [PartitionKey] NVARCHAR(255) NULL,
-          [WorkflowId] NVARCHAR(255) NULL,
-          [JobId] NVARCHAR(255) NULL,
-          [Dispatched] DATETIME NULL,
-          [HeaderBag] NVARCHAR(MAX) NULL,
-          [Body] VARBINARY(MAX) NULL,
-          [Source] NVARCHAR(255) NULL,
-          [Type] NVARCHAR(255) NULL,
-          [DataSchema] NVARCHAR(255) NULL,
-          [Subject] NVARCHAR(255) NULL,
-          [TraceParent] NVARCHAR(255) NULL,
-          [TraceState] NVARCHAR(255) NULL,
-          [Baggage] NVARCHAR(MAX) NULL,
-          PRIMARY KEY ( [Id] ) 
+          [CommandId] [NVARCHAR](256) NOT NULL ,
+          [CommandType] [NVARCHAR](256) NULL ,
+          [CommandBody] [NVARCHAR](MAX) NULL ,
+          [Timestamp] [DATETIME] NULL ,
+          [ContextKey] [NVARCHAR](256) NULL,
+          PRIMARY KEY ( [CommandId] )
         );
       END 
       """;
@@ -79,7 +59,7 @@ await using (SqlConnection connection = new(connectionString))
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
-    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Debug)
     .Enrich.FromLogContext()
     .WriteTo.Console()
     .CreateLogger();
@@ -95,13 +75,15 @@ var host = new HostBuilder()
                 Exchange = new Exchange("paramore.brighter.exchange")
             };
 
-            var configuration = new RelationalDatabaseConfiguration(connectionString, "BrighterTests", "OutboxMessages", binaryMessagePayload: true);
+            var configuration = new RelationalDatabaseConfiguration(connectionString, "BrighterTests", inboxTableName: "InboxMessages", binaryMessagePayload: true);
 
             services
                 .AddSingleton<IAmARelationalDatabaseConfiguration >(configuration)
                 .AddHostedService<ServiceActivatorHostedService>()
                 .AddConsumers(opt =>
                 {
+                    opt.InboxConfiguration = new InboxConfiguration(new MsSqlInbox(configuration));
+                    
                     opt.Subscriptions =
                     [
                         new RmqSubscription<OrderPlaced>(
@@ -128,10 +110,6 @@ var host = new HostBuilder()
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
-                    opt.Outbox = new MsSqlOutbox(configuration);
-                    opt.ConnectionProvider = typeof(MsSqlConnectionProvider);
-                    opt.TransactionProvider = typeof(MsSqlUnitOfWork);
-                    
                     opt.ProducerRegistry = new RmqProducerRegistryFactory(
                         connection,
                         [
@@ -146,9 +124,7 @@ var host = new HostBuilder()
                                 Topic = new RoutingKey("order-placed"),
                             },
                         ]).Create();
-                })
-                .UseOutboxSweeper(opt => { opt.BatchSize = 10; })
-                .UseOutboxArchiver<DbTransaction>(new NullOutboxArchiveProvider());
+                });
         }
     )
     .Build();
@@ -219,13 +195,13 @@ public class CreateNewOrderHandler(IAmACommandProcessor commandProcessor, ILogge
             var id = Uuid.NewAsString();
             logger.LogInformation("Creating a new order: {OrderId}", id);
 
-            await commandProcessor.DepositPostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
+            await commandProcessor.PostAsync(new OrderPlaced { OrderId = id, Value = command.Value }, cancellationToken: cancellationToken);
             if (command.Value % 3 == 0)
             {
                 throw new InvalidOperationException("invalid value");
             }
 
-            await commandProcessor.DepositPostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
+            await commandProcessor.PostAsync(new OrderPaid { OrderId = id }, cancellationToken: cancellationToken);
 
             return await base.HandleAsync(command, cancellationToken);
         }

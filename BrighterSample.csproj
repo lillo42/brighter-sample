@@ -9,8 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Paramore.Brighter.Outbox.Hosting" Version="10.0.0-preview.8" />
-    <PackageReference Include="Paramore.Brighter.Outbox.MsSql" Version="10.0.0-preview.8" />
+    <PackageReference Include="Paramore.Brighter.Inbox.MsSql" Version="10.0.0-preview.8" />
     <PackageReference Include="Paramore.Brighter.MessagingGateway.RMQ.Sync" Version="10.0.0-preview.8" />
     <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.0.0-preview.8" />
     <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.0-preview.8" />
