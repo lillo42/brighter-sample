@@ -1,7 +1,6 @@
 ﻿using System.Data.Common;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
@@ -10,8 +9,6 @@ using Paramore.Brighter.MessagingGateway.RMQ.Sync;
 using Paramore.Brighter.MsSql;
 using Paramore.Brighter.Outbox.Hosting;
 using Paramore.Brighter.Outbox.MsSql;
-using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
-using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
 
 const string connectionString = "Server=127.0.0.1,1433;Database=BrighterTests;User Id=sa;Password=Password123!;Application Name=BrighterTests;Connect Timeout=60;Encrypt=false;";
@@ -79,7 +76,7 @@ await using (SqlConnection connection = new(connectionString))
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
-    .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Warning)
+    // .MinimumLevel.Override("Paramore.Brighter", Serilog.Events.LogEventLevel.Warning)
     .Enrich.FromLogContext()
     .WriteTo.Console()
     .CreateLogger();
@@ -98,39 +95,20 @@ var host = new HostBuilder()
             var configuration = new RelationalDatabaseConfiguration(connectionString, "BrighterTests", "OutboxMessages", binaryMessagePayload: true);
 
             services
-                .AddSingleton<IAmARelationalDatabaseConfiguration >(configuration)
-                .AddHostedService<ServiceActivatorHostedService>()
-                .AddConsumers(opt =>
+                .AddSingleton<IAmARelationalDatabaseConfiguration>(configuration)
+                // .AddHostedService<SrviceActivatorHostedService>()
+                .AddBrighter(opt =>
                 {
-                    opt.Subscriptions =
-                    [
-                        new RmqSubscription<OrderPlaced>(
-                            new SubscriptionName("subscription"),
-                            new ChannelName("queue-order-placed"),
-                            new RoutingKey("order-placed"),
-                            makeChannels: OnMissingChannel.Create,
-                            messagePumpType: MessagePumpType.Reactor
-                        ),
-
-                        new RmqSubscription<OrderPaid>(
-                            new SubscriptionName("subscription"),
-                            new ChannelName("queue-order-paid"),
-                            new RoutingKey("order-paid"),
-                            makeChannels: OnMissingChannel.Create,
-                            messagePumpType: MessagePumpType.Reactor
-                        ),
-                    ];
-
-                    opt.DefaultChannelFactory = new ChannelFactory(
-                        new RmqMessageConsumerFactory(connection)
-                    );
+                    opt.HandlerLifetime = ServiceLifetime.Scoped;
+                    opt.CommandProcessorLifetime = ServiceLifetime.Scoped;
+                    opt.MapperLifetime = ServiceLifetime.Singleton;
                 })
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
                     opt.Outbox = new MsSqlOutbox(configuration);
-                    opt.ConnectionProvider = typeof(MsSqlConnectionProvider);
-                    opt.TransactionProvider = typeof(MsSqlUnitOfWork);
+                    opt.ConnectionProvider = typeof(MsSqlTransactionProvider);
+                    opt.TransactionProvider = typeof(MsSqlTransactionProvider);
                     
                     opt.ProducerRegistry = new RmqProducerRegistryFactory(
                         connection,
@@ -147,8 +125,12 @@ var host = new HostBuilder()
                             },
                         ]).Create();
                 })
-                .UseOutboxSweeper(opt => { opt.BatchSize = 10; })
-                .UseOutboxArchiver<DbTransaction>(new NullOutboxArchiveProvider());
+                .UseOutboxSweeper(opt =>
+                {
+                    opt.BatchSize = 10;
+                    // opt.MinimumMessageAge = TimeSpan.FromMilliseconds(300000); 
+                    // opt.TimerInterval = 60000;
+                });
         }
     )
     .Build();
