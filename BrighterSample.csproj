@@ -9,10 +9,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Paramore.Brighter.Inbox.Postgres" Version="10.0.0-preview.8" />
-    <PackageReference Include="Paramore.Brighter.MessagingGateway.RMQ.Async" Version="10.0.0-preview.8" />
-    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.0.0-preview.8" />
-    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.0-preview.8" />
+    <PackageReference Include="Fluent.Brighter.Kafka" Version="1.6.3" />
+    <PackageReference Include="Fluent.Brighter.Postgres" Version="1.6.3" />
+    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.2" />
     <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
   </ItemGroup>
 

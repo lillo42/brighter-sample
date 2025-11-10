@@ -1,10 +1,4 @@
 services:
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    platform: linux/amd64
-    ports:
-      - "5672:5672"
-      - "15672:15672"
   postgres:
     image: postgres
     ports:
@@ -12,3 +6,70 @@ services:
     environment:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: brightertests
+  
+  kafka:
+    image: apache/kafka:latest
+    hostname: broker
+    container_name: broker
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:29093
+      KAFKA_LISTENERS: PLAINTEXT://broker:29092,CONTROLLER://broker:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+#
+#  zookeeper:
+#    image: confluentinc/cp-zookeeper
+#    ports:
+#      - "2181"
+#    environment:
+#      ZOOKEEPER_CLIENT_PORT: 2181
+#
+#  kafka:
+#    image: confluentinc/cp-kafka
+#    depends_on:
+#      - zookeeper
+#    healthcheck:
+#      test: kafka-topics --bootstrap-server kafka:29092 --list || exit 1
+#      interval: 10s
+#      timeout: 10s
+#      retries: 5
+#    ports:
+#      - "9092:9092"
+#      - "29092:29092"
+#      - "9997:9997"
+#    expose:
+#      - "29092"
+#      - "9092"
+#    environment:
+#      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+#      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+#      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+#      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+#      KAFKA_PROCESS_ROLES: 'broker,controller'
+#      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+#      KAFKA_MIN_INSYNC_REPLICAS: "1"
+#
+  kafka-ui:
+    image: provectuslabs/kafka-ui
+    container_name: kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8088:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: kafka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_METRICS_PORT: 9997
