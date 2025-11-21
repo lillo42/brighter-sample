@@ -42,7 +42,8 @@ var host = new HostBuilder()
             var configuration = new MongoDbConfiguration(connectionString, "brighter")
             {
                 Inbox = new MongoDbCollectionConfiguration { Name = "inbox" },
-                Outbox = new MongoDbCollectionConfiguration { Name = "outbox" }
+                Outbox = new MongoDbCollectionConfiguration { Name = "outbox" },
+                Locking = new MongoDbCollectionConfiguration { Name = "locking" },
             };
 
             services
