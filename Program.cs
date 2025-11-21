@@ -67,14 +67,9 @@ var host = new HostBuilder()
                 Exchange = new Exchange("paramore.brighter.exchange"),
             };
 
-            var outbox =
-                new PostgreSqlOutbox(
-                    new RelationalDatabaseConfiguration(connectionString, "brightertests", "outboxmessages"));
-
             services
                 .AddHostedService<ServiceActivatorHostedService>()
                 .AddSingleton<IAmARelationalDatabaseConfiguration>(new RelationalDatabaseConfiguration(connectionString, "brightertests" ,"outboxmessages"))
-                .AddSingleton<IAmAnOutbox>(outbox)
                 .AddConsumers(opt =>
                 {
                     opt.Subscriptions =
@@ -101,9 +96,9 @@ var host = new HostBuilder()
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
-                    opt.ConnectionProvider = typeof(PostgreSqlUnitOfWork);
-                    opt.TransactionProvider = typeof(PostgreSqlUnitOfWork);
-                    opt.Outbox = outbox;
+                    opt.ConnectionProvider = typeof(PostgreSqlConnectionProvider);
+                    opt.TransactionProvider = typeof(PostgreSqlTransactionProvider);
+                    opt.Outbox = new PostgreSqlOutbox(new RelationalDatabaseConfiguration(connectionString, "brightertests", "outboxmessages"));;
                     opt.ProducerRegistry = new RmqProducerRegistryFactory(
                         connection,
                         [
