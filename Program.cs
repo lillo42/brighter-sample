@@ -5,6 +5,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
+using Paramore.Brighter.Inbox.MongoDb;
+using Paramore.Brighter.Locking.MongoDb;
 using Paramore.Brighter.MessagingGateway.Kafka;
 using Paramore.Brighter.MongoDb;
 using Paramore.Brighter.Outbox.Hosting;
@@ -39,7 +41,8 @@ var host = new HostBuilder()
 
             var configuration = new MongoDbConfiguration(connectionString, "brighter")
             {
-                Outbox = new MongoDbCollectionConfiguration{Name = "outbox"}
+                Inbox = new MongoDbCollectionConfiguration { Name = "inbox" },
+                Outbox = new MongoDbCollectionConfiguration { Name = "outbox" }
             };
 
             services
@@ -68,14 +71,14 @@ var host = new HostBuilder()
                         )
                     ];
 
-                    opt.DefaultChannelFactory = new ChannelFactory(
-                        new KafkaMessageConsumerFactory(connection)
-                    );
+                    opt.DefaultChannelFactory = new ChannelFactory(new KafkaMessageConsumerFactory(connection));
+                    opt.InboxConfiguration = new InboxConfiguration(new MongoDbInbox(configuration));
                 })
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
                     opt.Outbox = new MongoDbOutbox(configuration);
+                    opt.DistributedLock = new MongoDbLockingProvider(configuration);
                     opt.ConnectionProvider = typeof(MongoDbConnectionProvider);
                     opt.TransactionProvider = typeof(MongoDbUnitOfWork);
                     

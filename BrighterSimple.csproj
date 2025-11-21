@@ -8,6 +8,8 @@
   </PropertyGroup>
 
     <ItemGroup>
+        <PackageReference Include="Paramore.Brighter.Inbox.MongoDb" Version="10.0.2" />
+        <PackageReference Include="Paramore.Brighter.Locking.MongoDb" Version="10.0.2" />
         <PackageReference Include="Paramore.Brighter.MessagingGateway.Kafka" Version="10.0.2" />
         <PackageReference Include="Paramore.Brighter.Outbox.Hosting" Version="10.0.2" />
         <PackageReference Include="Paramore.Brighter.Outbox.MongoDb" Version="10.0.2" />
