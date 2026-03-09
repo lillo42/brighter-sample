@@ -5,12 +5,13 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
-using Paramore.Brighter.Inbox.MongoDb;
-using Paramore.Brighter.Locking.MongoDb;
+using Amazon.DynamoDBv2;
+using Paramore.Brighter.DynamoDb.V4;
+using Paramore.Brighter.Inbox.DynamoDB.V4;
+using Paramore.Brighter.Locking.DynamoDB.V4;
 using Paramore.Brighter.MessagingGateway.Kafka;
-using Paramore.Brighter.MongoDb;
+using Paramore.Brighter.Outbox.DynamoDB.V4;
 using Paramore.Brighter.Outbox.Hosting;
-using Paramore.Brighter.Outbox.MongoDb;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
@@ -37,17 +38,40 @@ var host = new HostBuilder()
                 SaslMechanisms = SaslMechanism.Plain,
             };
 
-            const string connectionString = "mongodb://root:example@localhost:27017";
+            // DynamoDB Local for development
+            var dynamoDbClient = new AmazonDynamoDBClient(
+                new AmazonDynamoDBConfig
+                {
+                    ServiceURL = "http://localhost:8000",
+                    AuthenticationRegion = "us-east-1"
+                }
+            );
 
-            var configuration = new MongoDbConfiguration(connectionString, "brighter")
-            {
-                Inbox = new MongoDbCollectionConfiguration { Name = "inbox" },
-                Outbox = new MongoDbCollectionConfiguration { Name = "outbox" },
-                Locking = new MongoDbCollectionConfiguration { Name = "locking" },
-            };
+            // Outbox configuration
+            var outboxConfig = new DynamoDbConfiguration(
+                tableName: "brighter_outbox",
+                timeout: 500,
+                numberOfShards: 3,
+                scanConcurrency: 3
+            );
+            outboxConfig.TimeToLive = TimeSpan.FromDays(1);
+
+            // Inbox configuration
+            var inboxConfig = new DynamoDbInboxConfiguration(
+                tableName: "brighter_inbox"
+            );
+
+            // Locking configuration
+            var lockingOptions = new DynamoDbLockingProviderOptions(
+                lockTableName: "brighter_distributed_lock",
+                leaseholderGroupId: "brighter-sample"
+            );
 
             services
-                .AddSingleton<IAmAMongoDbConfiguration>(configuration)
+                .AddSingleton<IAmazonDynamoDB>(dynamoDbClient)
+                .AddSingleton(outboxConfig)
+                .AddSingleton(inboxConfig)
+                .AddSingleton(lockingOptions)
                 .AddHostedService<ServiceActivatorHostedService>()
                 .AddConsumers(opt =>
                 {
@@ -73,15 +97,14 @@ var host = new HostBuilder()
                     ];
 
                     opt.DefaultChannelFactory = new ChannelFactory(new KafkaMessageConsumerFactory(connection));
-                    opt.InboxConfiguration = new InboxConfiguration(new MongoDbInbox(configuration));
+                    opt.InboxConfiguration = new InboxConfiguration(new DynamoDbInbox(dynamoDbClient, inboxConfig));
                 })
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
-                    opt.Outbox = new MongoDbOutbox(configuration);
-                    opt.DistributedLock = new MongoDbLockingProvider(configuration);
-                    opt.ConnectionProvider = typeof(MongoDbConnectionProvider);
-                    opt.TransactionProvider = typeof(MongoDbUnitOfWork);
+                    opt.Outbox = new DynamoDbOutbox(dynamoDbClient, outboxConfig);
+                    opt.DistributedLock = new DynamoDbLockingProvider(dynamoDbClient, lockingOptions);
+                    opt.TransactionProvider = typeof(DynamoDbUnitOfWork);
                     
                     opt.ProducerRegistry = new KafkaProducerRegistryFactory(
                         connection,

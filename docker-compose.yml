@@ -1,12 +1,10 @@
 ﻿services:
-  mongo:
-    image: mongo
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: example
-      MONGO_INITDB_DATABASE: brighter
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: dynamodb-local
     ports:
-      - "27017:27017"
+      - "8000:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb"
   
   zookeeper:
     image: confluentinc/cp-zookeeper:latest

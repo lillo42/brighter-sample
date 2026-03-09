@@ -7,14 +7,15 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
-    <ItemGroup>
-        <PackageReference Include="Paramore.Brighter.Inbox.MongoDb" Version="10.0.2" />
-        <PackageReference Include="Paramore.Brighter.Locking.MongoDb" Version="10.0.2" />
-        <PackageReference Include="Paramore.Brighter.MessagingGateway.Kafka" Version="10.0.2" />
-        <PackageReference Include="Paramore.Brighter.Outbox.Hosting" Version="10.0.2" />
-        <PackageReference Include="Paramore.Brighter.Outbox.MongoDb" Version="10.0.2" />
-        <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.0.2" />
-        <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.2" />
-        <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
-    </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Paramore.Brighter.Inbox.DynamoDB.V4" Version="10.3.0" />
+    <PackageReference Include="Paramore.Brighter.Locking.DynamoDB.V4" Version="10.3.0" />
+    <PackageReference Include="Paramore.Brighter.MessagingGateway.Kafka" Version="10.3.0" />
+    <PackageReference Include="Paramore.Brighter.Outbox.DynamoDB.V4" Version="10.3.0" />
+    <PackageReference Include="Paramore.Brighter.Outbox.Hosting" Version="10.3.0" />
+    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.3.0" />
+    <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.3.0" />
+    <PackageReference Include="AWSSDK.DynamoDBv2" Version="4.0.15" />
+    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+  </ItemGroup>
 </Project>
