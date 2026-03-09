@@ -1,8 +1,8 @@
-# MongoDB to DynamoDB Migration Plan
+# MongoDB to DynamoDB Migration Plan (AWS SDK v4)
 
 ## Overview
 
-This document outlines the migration strategy from MongoDB to DynamoDB for the Brighter messaging infrastructure components (Inbox, Outbox, and Distributed Locking).
+This document outlines the migration strategy from MongoDB to DynamoDB for the Brighter messaging infrastructure components (Inbox, Outbox, and Distributed Locking). This plan uses **AWS SDK v4** for .NET.
 
 ## Current State
 
@@ -43,20 +43,23 @@ var configuration = new MongoDbConfiguration(connectionString, "brighter")
 ### DynamoDB Dependencies
 
 ```xml
-<PackageReference Include="Paramore.Brighter.Inbox.DynamoDb" Version="10.3.0" />
-<PackageReference Include="Paramore.Brighter.Locking.DynamoDb" Version="10.3.0" />
-<PackageReference Include="Paramore.Brighter.Outbox.DynamoDb" Version="10.3.0" />
+<PackageReference Include="Paramore.Brighter.Inbox.DynamoDb.V4" Version="10.3.0" />
+<PackageReference Include="Paramore.Brighter.Locking.DynamoDb.V4" Version="10.3.0" />
+<PackageReference Include="Paramore.Brighter.Outbox.DynamoDb.V4" Version="10.3.0" />
 <PackageReference Include="AWSSDK.DynamoDBv2" Version="4.0.15" />
+<PackageReference Include="AWSSDK.Core" Version="4.0.15" />
 ```
 
 ### DynamoDB Configuration
 
 ```csharp
-var dynamoDbConfig = new DynamoDbConfiguration(
-    tableNamePrefix: "brighter-",
-    region: RegionEndpoint.USEast1,  // or from config
-    serviceUrl: "http://localhost:8000"  // for local DynamoDB
-);
+var dynamoDbConfig = new AmazonDynamoDBConfig
+{
+    Region = "us-east-1",  // or from config
+    ServiceUrl = "http://localhost:8000"  // for local DynamoDB
+};
+
+var dynamoDbClient = new AmazonDynamoDBClient(dynamoDbConfig);
 ```
 
 ---
@@ -103,10 +106,11 @@ dotnet remove package Paramore.Brighter.Outbox.MongoDb
 #### 2.2 Add DynamoDB Packages
 
 ```bash
-dotnet add package Paramore.Brighter.Inbox.DynamoDb --version 10.3.0
-dotnet add package Paramore.Brighter.Locking.DynamoDb --version 10.3.0
-dotnet add package Paramore.Brighter.Outbox.DynamoDb --version 10.3.0
-dotnet add package AWSSDK.DynamoDBv2
+dotnet add package Paramore.Brighter.Inbox.DynamoDb.V4 --version 10.3.0
+dotnet add package Paramore.Brighter.Locking.DynamoDb.V4 --version 10.3.0
+dotnet add package Paramore.Brighter.Outbox.DynamoDb.V4 --version 10.3.0
+dotnet add package AWSSDK.DynamoDBv2 --version 4.0.15
+dotnet add package AWSSDK.Core --version 4.0.15
 ```
 
 ### Phase 3: Code Changes
@@ -123,11 +127,11 @@ using Paramore.Brighter.Outbox.MongoDb;
 
 **Add:**
 ```csharp
-using Paramore.Brighter.Inbox.DynamoDb;
-using Paramore.Brighter.Locking.DynamoDb;
-using Paramore.Brighter.Outbox.DynamoDb;
+using Paramore.Brighter.Inbox.DynamoDb.V4;
+using Paramore.Brighter.Locking.DynamoDb.V4;
+using Paramore.Brighter.Outbox.DynamoDb.V4;
 using Amazon.DynamoDBv2;
-using Amazon;
+using Amazon.Runtime;
 ```
 
 #### 3.2 Update Configuration Section
@@ -148,19 +152,14 @@ services.AddSingleton<IAmAMongoDbConfiguration>(configuration);
 
 **With:**
 ```csharp
-// DynamoDB Local for development
-var dynamoDbClient = new AmazonDynamoDBClient(
-    new AmazonDynamoDBConfig
-    {
-        ServiceURL = "http://localhost:8000",
-        AuthenticationRegion = "us-east-1"
-    }
-);
+// DynamoDB Local for development using AWS SDK v4
+var dynamoDbConfig = new AmazonDynamoDBConfig
+{
+    Region = "us-east-1",
+    ServiceUrl = "http://localhost:8000"
+};
 
-var dynamoDbConfig = new DynamoDbConfiguration(
-    dynamoDbClient,
-    tableNamePrefix: "brighter-"
-);
+var dynamoDbClient = new AmazonDynamoDBClient(dynamoDbConfig);
 
 services.AddSingleton<IAmazonDynamoDB>(dynamoDbClient);
 ```
@@ -174,7 +173,7 @@ opt.InboxConfiguration = new InboxConfiguration(new MongoDbInbox(configuration))
 
 **With:**
 ```csharp
-opt.InboxConfiguration = new InboxConfiguration(new DynamoDbInbox(dynamoDbConfig));
+opt.InboxConfiguration = new InboxConfiguration(new DynamoDbInboxV4(dynamoDbClient));
 ```
 
 #### 3.4 Update Producer Configuration (lines 79-102)
@@ -195,10 +194,10 @@ opt.InboxConfiguration = new InboxConfiguration(new DynamoDbInbox(dynamoDbConfig
 ```csharp
 .AddProducers(opt =>
 {
-    opt.Outbox = new DynamoDbOutbox(dynamoDbConfig);
-    opt.DistributedLock = new DynamoDbLockingProvider(dynamoDbConfig);
-    opt.ConnectionProvider = typeof(DynamoDbConnectionProvider);
-    opt.TransactionProvider = typeof(DynamoDbUnitOfWork);
+    opt.Outbox = new DynamoDbOutboxV4(dynamoDbClient);
+    opt.DistributedLock = new DynamoDbLockingProviderV4(dynamoDbClient);
+    opt.ConnectionProvider = typeof(DynamoDbConnectionProviderV4);
+    opt.TransactionProvider = typeof(DynamoDbUnitOfWorkV4);
     // ... rest of configuration
 })
 ```
@@ -268,9 +267,9 @@ aws dynamodb scan --table-name brighter-locking --endpoint-url http://localhost:
 - [ ] Add DynamoDB NuGet packages
 - [ ] Update Program.cs using statements
 - [ ] Replace MongoDB configuration with DynamoDB
-- [ ] Replace MongoDbInbox with DynamoDbInbox
-- [ ] Replace MongoDbOutbox with DynamoDbOutbox
-- [ ] Replace MongoDbLockingProvider with DynamoDbLockingProvider
+- [ ] Replace MongoDbInbox with DynamoDbInboxV4
+- [ ] Replace MongoDbOutbox with DynamoDbOutboxV4
+- [ ] Replace MongoDbLockingProvider with DynamoDbLockingProviderV4
 - [ ] Replace connection provider
 - [ ] Replace transaction provider
 - [ ] Create table initialization scripts
@@ -295,14 +294,20 @@ If issues arise during migration:
 
 ### AWS DynamoDB (vs Local)
 
-For production AWS deployment:
+For production AWS deployment using AWS SDK v4:
 
 ```csharp
-// Production configuration
-var dynamoDbClient = new AmazonDynamoDBClient(
-    new BasicAWSCredentials(accessKey, secretKey),
-    RegionEndpoint.USEast1  // or appropriate region
-);
+// Production configuration with explicit credentials
+var dynamoDbConfig = new AmazonDynamoDBConfig
+{
+    Region = "us-east-1"  // or appropriate region
+};
+
+var credentials = new BasicAWSCredentials(accessKey, secretKey);
+var dynamoDbClient = new AmazonDynamoDBClient(credentials, dynamoDbConfig);
+
+// Or use instance profile/role-based authentication (recommended for EC2/ECS/Lambda)
+var dynamoDbClient = new AmazonDynamoDBClient(dynamoDbConfig);
 ```
 
 ### Capacity Planning
@@ -322,3 +327,5 @@ Consider using DynamoDB On-Demand for variable workloads.
 - [Brighter DynamoDB Documentation](https://paramore.readthedocs.io/)
 - [DynamoDB Local Documentation](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.html)
 - [AWS DynamoDB Best Practices](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/best-practices.html)
+- [AWS SDK for .NET v4 Migration Guide](https://docs.aws.amazon.com/sdk-for-net/v4/developer-guide/net-dg-v4.html)
+- [AWSSDK.DynamoDBv2 NuGet Package](https://www.nuget.org/packages/AWSSDK.DynamoDBv2)
