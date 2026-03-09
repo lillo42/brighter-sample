@@ -1,16 +1,17 @@
 ﻿// See https://aka.ms/new-console-template for more information
 
+using Amazon.DynamoDBv2;
+using Amazon.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Paramore.Brighter;
 using Paramore.Brighter.Extensions.DependencyInjection;
-using Paramore.Brighter.Inbox.MongoDb;
-using Paramore.Brighter.Locking.MongoDb;
+using Paramore.Brighter.Inbox.DynamoDb.V4;
+using Paramore.Brighter.Locking.DynamoDb.V4;
 using Paramore.Brighter.MessagingGateway.Kafka;
-using Paramore.Brighter.MongoDb;
+using Paramore.Brighter.Outbox.DynamoDb.V4;
 using Paramore.Brighter.Outbox.Hosting;
-using Paramore.Brighter.Outbox.MongoDb;
 using Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection;
 using Paramore.Brighter.ServiceActivator.Extensions.Hosting;
 using Serilog;
@@ -37,17 +38,17 @@ var host = new HostBuilder()
                 SaslMechanisms = SaslMechanism.Plain,
             };
 
-            const string connectionString = "mongodb://root:example@localhost:27017";
-
-            var configuration = new MongoDbConfiguration(connectionString, "brighter")
+            // DynamoDB Local for development using AWS SDK v4
+            var dynamoDbConfig = new AmazonDynamoDBConfig
             {
-                Inbox = new MongoDbCollectionConfiguration { Name = "inbox" },
-                Outbox = new MongoDbCollectionConfiguration { Name = "outbox" },
-                Locking = new MongoDbCollectionConfiguration { Name = "locking" },
+                Region = "us-east-1",
+                ServiceUrl = "http://localhost:8000"
             };
 
+            var dynamoDbClient = new AmazonDynamoDBClient(dynamoDbConfig);
+
             services
-                .AddSingleton<IAmAMongoDbConfiguration>(configuration)
+                .AddSingleton<IAmazonDynamoDB>(dynamoDbClient)
                 .AddHostedService<ServiceActivatorHostedService>()
                 .AddConsumers(opt =>
                 {
@@ -73,15 +74,15 @@ var host = new HostBuilder()
                     ];
 
                     opt.DefaultChannelFactory = new ChannelFactory(new KafkaMessageConsumerFactory(connection));
-                    opt.InboxConfiguration = new InboxConfiguration(new MongoDbInbox(configuration));
+                    opt.InboxConfiguration = new InboxConfiguration(new DynamoDbInboxV4(dynamoDbClient));
                 })
                 .AutoFromAssemblies()
                 .AddProducers(opt =>
                 {
-                    opt.Outbox = new MongoDbOutbox(configuration);
-                    opt.DistributedLock = new MongoDbLockingProvider(configuration);
-                    opt.ConnectionProvider = typeof(MongoDbConnectionProvider);
-                    opt.TransactionProvider = typeof(MongoDbUnitOfWork);
+                    opt.Outbox = new DynamoDbOutboxV4(dynamoDbClient);
+                    opt.DistributedLock = new DynamoDbLockingProviderV4(dynamoDbClient);
+                    opt.ConnectionProvider = typeof(DynamoDbConnectionProviderV4);
+                    opt.TransactionProvider = typeof(DynamoDbUnitOfWorkV4);
                     
                     opt.ProducerRegistry = new KafkaProducerRegistryFactory(
                         connection,

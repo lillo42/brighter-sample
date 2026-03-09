@@ -8,11 +8,13 @@
   </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Paramore.Brighter.Inbox.MongoDb" Version="10.0.2" />
-        <PackageReference Include="Paramore.Brighter.Locking.MongoDb" Version="10.0.2" />
+        <PackageReference Include="AWSSDK.Core" Version="4.0.15" />
+        <PackageReference Include="AWSSDK.DynamoDBv2" Version="4.0.15" />
+        <PackageReference Include="Paramore.Brighter.Inbox.DynamoDb.V4" Version="10.3.0" />
+        <PackageReference Include="Paramore.Brighter.Locking.DynamoDb.V4" Version="10.3.0" />
         <PackageReference Include="Paramore.Brighter.MessagingGateway.Kafka" Version="10.0.2" />
+        <PackageReference Include="Paramore.Brighter.Outbox.DynamoDb.V4" Version="10.3.0" />
         <PackageReference Include="Paramore.Brighter.Outbox.Hosting" Version="10.0.2" />
-        <PackageReference Include="Paramore.Brighter.Outbox.MongoDb" Version="10.0.2" />
         <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.DependencyInjection" Version="10.0.2" />
         <PackageReference Include="Paramore.Brighter.ServiceActivator.Extensions.Hosting" Version="10.0.2" />
         <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
